@@ -2437,11 +2437,7 @@ function Dashboard() {
                       return (
                         <div 
                           key={cohort.id} 
-                          onClick={() => {
-                            setSelectedClassDetails(cohort);
-                            fetchClassRoster(cohort.id);
-                          }}
-                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2 cursor-pointer`}
+                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2`}
                         >
                           {/* Top Accent Bar */}
                           <div className={`h-2 w-full ${colorStyles.topBar}`}></div>
