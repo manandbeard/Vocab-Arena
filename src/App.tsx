@@ -189,6 +189,13 @@ function Navbar() {
                 <Swords className="w-4 h-4" />
                 Arena
               </Link>
+              <Link
+                to="/leaderboard"
+                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${location.pathname === '/leaderboard' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
+              >
+                <Trophy className="w-4 h-4" />
+                Standings
+              </Link>
             </div>
           </div>
 
@@ -243,6 +250,14 @@ function Navbar() {
           >
             <Swords className="w-5 h-5" />
             Arena
+          </Link>
+          <Link
+            to="/leaderboard"
+            onClick={() => setIsMenuOpen(false)}
+            className="flex items-center gap-3 px-3 py-2 rounded-md text-base font-medium text-slate-400 hover:text-white hover:bg-slate-900"
+          >
+            <Trophy className="w-5 h-5" />
+            Standings
           </Link>
           {role === 'student' && (
             <button 
@@ -3119,6 +3134,161 @@ function Dashboard() {
   );
 }
 
+function Leaderboard() {
+  interface LeaderboardPlayer {
+    rank: number;
+    name: string;
+    xp: number;
+    playerRank: string;
+    cohort_name: string;
+  }
+  interface TeamStanding {
+    cohortId: string;
+    name: string;
+    studentCount: number;
+    averageXp: number;
+  }
+
+  const [view, setView] = useState<'players' | 'teams'>('players');
+  const [topPlayers, setTopPlayers] = useState<LeaderboardPlayer[]>([]);
+  const [teamStandings, setTeamStandings] = useState<TeamStanding[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchLeaderboard = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('/api/leaderboard', {
+          headers: { 'x-auth-token': token || '' }
+        });
+        if (!response.ok) throw new Error('Failed to fetch leaderboard');
+        const data = await response.json();
+        setTopPlayers(data.topPlayers || []);
+        setTeamStandings(data.teamStandings || []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'An error occurred');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchLeaderboard();
+  }, []);
+
+  const getMedalStyle = (rank: number) => {
+    if (rank === 1) return { text: 'text-yellow-400', border: 'border-yellow-400/50', bg: 'bg-yellow-400/10', label: '🥇' };
+    if (rank === 2) return { text: 'text-slate-300', border: 'border-slate-300/50', bg: 'bg-slate-300/10', label: '🥈' };
+    if (rank === 3) return { text: 'text-amber-600', border: 'border-amber-600/50', bg: 'bg-amber-600/10', label: '🥉' };
+    return { text: 'text-slate-400', border: 'border-slate-700', bg: 'bg-slate-800/50', label: `#${rank}` };
+  };
+
+  const getRankStyle = (playerRank: string) => {
+    if (playerRank === 'Platinum') return 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20';
+    if (playerRank === 'Gold') return 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20';
+    if (playerRank === 'Silver') return 'bg-slate-400/10 text-slate-400 border border-slate-400/20';
+    return 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20';
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-200 p-4 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <header className="mb-8 text-center">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <Trophy className="w-10 h-10 text-yellow-400" />
+            <h1 className="text-4xl font-black text-white tracking-tight uppercase">Standings</h1>
+            <Trophy className="w-10 h-10 text-yellow-400" />
+          </div>
+          <p className="text-slate-400 font-medium">Global Esports Leaderboard</p>
+        </header>
+
+        {/* Toggle */}
+        <div className="flex bg-slate-950 rounded-xl p-1.5 border border-slate-800 shadow-inner mb-8 max-w-xs mx-auto">
+          <button
+            onClick={() => setView('players')}
+            className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all ${view === 'players' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+          >
+            🏆 Top Players
+          </button>
+          <button
+            onClick={() => setView('teams')}
+            className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all ${view === 'teams' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+          >
+            🛡️ Team Standings
+          </button>
+        </div>
+
+        {/* Content */}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="text-center py-20 text-red-400">
+            <ShieldAlert className="w-10 h-10 mx-auto mb-4" />
+            <p className="font-bold">{error}</p>
+          </div>
+        ) : view === 'players' ? (
+          <div className="space-y-3">
+            {topPlayers.length === 0 ? (
+              <p className="text-center text-slate-500 py-20">No players yet. Complete arena sessions to appear here!</p>
+            ) : topPlayers.map((player) => {
+              const medal = getMedalStyle(player.rank);
+              return (
+                <div
+                  key={player.rank}
+                  className={`flex items-center gap-4 p-4 rounded-xl border ${medal.border} ${medal.bg} transition-all hover:scale-[1.01]`}
+                >
+                  <div className={`text-2xl font-black w-10 text-center shrink-0 ${medal.text}`}>
+                    {medal.label}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-black text-white text-lg leading-tight truncate">{player.name}</p>
+                    <p className="text-slate-500 text-sm font-medium truncate">{player.cohort_name}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter ${getRankStyle(player.playerRank)}`}>
+                      {player.playerRank}
+                    </span>
+                    <span className="font-mono font-black text-indigo-400 text-lg">{(player.xp || 0).toLocaleString()} <span className="text-xs text-slate-500">XP</span></span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {teamStandings.length === 0 ? (
+              <p className="text-center text-slate-500 py-20">No team data available yet.</p>
+            ) : teamStandings.map((team, index) => {
+              const medal = getMedalStyle(index + 1);
+              return (
+                <div
+                  key={team.cohortId}
+                  className={`flex items-center gap-4 p-4 rounded-xl border ${medal.border} ${medal.bg} transition-all hover:scale-[1.01]`}
+                >
+                  <div className={`text-2xl font-black w-10 text-center shrink-0 ${medal.text}`}>
+                    {medal.label}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-black text-white text-lg leading-tight truncate">{team.name}</p>
+                    <p className="text-slate-500 text-sm font-medium">{team.studentCount} active student{team.studentCount !== 1 ? 's' : ''}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="font-mono font-black text-indigo-400 text-lg">{(team.averageXp || 0).toLocaleString()} <span className="text-xs text-slate-500">avg XP</span></p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- Router Setup ---
 
 function ProtectedRoute({ children, allowedRole }: { children: React.ReactNode, allowedRole?: string }) {
@@ -3213,6 +3383,14 @@ export default function App() {
                 <Dashboard />
               </ProtectedRoute>
             } 
+          />
+          <Route
+            path="/leaderboard"
+            element={
+              <ProtectedRoute>
+                <Leaderboard />
+              </ProtectedRoute>
+            }
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
