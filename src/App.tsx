@@ -6,6 +6,14 @@ import { GoogleGenAI } from "@google/genai";
 import { auth, db, googleProvider, isFirebaseConfigured } from './firebase';
 import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus, Archive, Copy } from 'lucide-react';
 
+// --- Auth Token Helper ---
+const getAuthToken = async (): Promise<string> => {
+  if (auth.currentUser) {
+    return await auth.currentUser.getIdToken();
+  }
+  return localStorage.getItem('token') || '';
+};
+
 // --- SM-2 Algorithm ---
 
 interface SM2Result {
@@ -133,7 +141,7 @@ function Navbar() {
   const handleUpdateCohort = async (newCohort: string) => {
     setIsUpdatingCohort(true);
     try {
-        const token = localStorage.getItem('token');
+        const token = await getAuthToken();
         const response = await fetch('/api/user/set-cohort', {
             method: 'POST',
             headers: {
@@ -565,7 +573,7 @@ function Arena() {
     if (!joinCode.trim()) return;
     setIsSettingCohort(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/user/join-class', {
         method: 'POST',
         headers: {
@@ -594,7 +602,7 @@ function Arena() {
   const fetchItems = async () => {
     setIsLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/study/queue', {
         headers: {
           'x-auth-token': token || ''
@@ -683,7 +691,7 @@ function Arena() {
       );
 
       // Call API to log review and update progress
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/study/log-review', {
         method: 'POST',
         headers: {
@@ -745,7 +753,7 @@ function Arena() {
   const handleSubmitStrike = async () => {
     if (!studentSentence.trim()) return;
     setIsSubmitting(true);
-    const token = localStorage.getItem('token');
+    const token = await getAuthToken();
     const currentItem = items[currentIndex];
 
     try {
@@ -1404,7 +1412,7 @@ function Dashboard() {
   const handleSaveSettings = async () => {
     if (!editingClass) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/classes/${editingClass.id}/settings`, {
         method: 'PATCH',
         headers: { 
@@ -1455,7 +1463,7 @@ function Dashboard() {
   const fetchClassRoster = async (cohortId: string) => {
     setIsLoadingClassRoster(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/roster/${cohortId}`, {
         headers: { 'x-auth-token': token || '' }
       });
@@ -1473,7 +1481,7 @@ function Dashboard() {
   const handleMoveStudent = async () => {
     if (!movingStudent || !newCohortForStudent) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/student/${movingStudent.id}/move`, {
         method: 'PATCH',
         headers: { 
@@ -1499,7 +1507,7 @@ function Dashboard() {
   const handleRemoveStudent = async () => {
     if (!removingStudent) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/student/${removingStudent.id}/remove`, {
         method: 'DELETE',
         headers: { 'x-auth-token': token || '' }
@@ -1519,7 +1527,7 @@ function Dashboard() {
 
   const fetchRecent = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/admin/word-bank', {
         headers: { 'x-auth-token': token || '' }
       });
@@ -1535,7 +1543,7 @@ function Dashboard() {
   const fetchRoster = async () => {
     setIsLoadingRoster(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/admin/roster', {
         headers: { 'x-auth-token': token || '' }
       });
@@ -1554,7 +1562,7 @@ function Dashboard() {
     if (!selectedCohortId) return;
     setIsLoadingBottlenecks(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/bottlenecks/${selectedCohortId}`, {
         headers: { 'x-auth-token': token || '' }
       });
@@ -1600,7 +1608,7 @@ function Dashboard() {
     if (!newCohortName.trim() || !db) return;
     setIsCreatingCohort(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch('/api/admin/classes', {
         method: 'POST',
         headers: {
@@ -1631,7 +1639,7 @@ function Dashboard() {
   const handleArchiveCohort = async (id: string) => {
     if (!window.confirm('Are you sure you want to archive this class?')) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/classes/${id}/archive`, {
         method: 'PATCH',
         headers: { 'x-auth-token': token || '' }
@@ -1648,7 +1656,7 @@ function Dashboard() {
   const handleDeleteCohort = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this class? This action cannot be undone.')) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/classes/${id}`, {
         method: 'DELETE',
         headers: { 'x-auth-token': token || '' }
@@ -1702,7 +1710,7 @@ function Dashboard() {
   const handleSaveEdit = async () => {
     if (!editingItem) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/edit-item/${editingItem.id}`, {
         method: 'PATCH',
         headers: {
@@ -1726,7 +1734,7 @@ function Dashboard() {
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       const response = await fetch(`/api/admin/toggle-status/${id}`, {
         method: 'PATCH',
         headers: {
