@@ -240,6 +240,16 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/admin/classes/:id", verifyFirebaseToken, verifyTeacher, async (req, res) => {
+    try {
+      await db.collection('classes').doc(req.params.id).delete();
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error deleting class:', error);
+      res.status(500).json({ error: 'Failed to delete class' });
+    }
+  });
+
   app.post("/api/user/join-class", verifyFirebaseToken, async (req, res) => {
     const { joinCode } = req.body;
     const { uid } = req.user;

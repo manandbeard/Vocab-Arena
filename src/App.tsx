@@ -1646,11 +1646,20 @@ function Dashboard() {
   };
 
   const handleDeleteCohort = async (id: string) => {
-    if (!db || !window.confirm('Are you sure you want to delete this class? This action cannot be undone.')) return;
+    if (!window.confirm('Are you sure you want to delete this class? This action cannot be undone.')) return;
     try {
-      await deleteDoc(doc(db, 'classes', id));
-      await fetchCohorts();
-      showToast('Class deleted successfully!');
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/admin/classes/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-auth-token': token || '' }
+      });
+
+      if (response.ok) {
+        await fetchCohorts();
+        showToast('Class deleted successfully!');
+      } else {
+        throw new Error('Failed to delete class');
+      }
     } catch (e) {
       console.error(e);
       showToast('Failed to delete class.', 'error');
@@ -2457,19 +2466,17 @@ function Dashboard() {
                                 >
                                   <Settings className="w-5 h-5" />
                                 </button>
-                                {!showArchived && (
-                                  <button 
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      handleArchiveCohort(cohort.id);
-                                    }}
-                                    className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all z-10 relative"
-                                    title="Archive Class"
-                                  >
-                                    <Archive className="w-5 h-5" />
-                                  </button>
-                                )}
+                                <button 
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleArchiveCohort(cohort.id);
+                                  }}
+                                  className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all z-10 relative"
+                                  title="Archive Class"
+                                >
+                                  <Archive className="w-5 h-5" />
+                                </button>
                                 <button 
                                   onClick={(e) => {
                                     e.preventDefault();
