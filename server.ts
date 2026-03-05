@@ -198,7 +198,9 @@ async function startServer() {
         theme_color: theme_color || 'indigo',
         is_archived: false,
         created_at: new Date().toISOString(),
-        student_count: 0
+        student_count: 0,
+        boss_encounter_rate: 15,
+        ai_strictness: 'standard'
       };
 
       const docRef = await db.collection('classes').add(newClass);
@@ -206,6 +208,22 @@ async function startServer() {
     } catch (error) {
       console.error('Error creating class:', error);
       res.status(500).json({ error: 'Failed to create class' });
+    }
+  });
+
+  app.patch("/api/admin/classes/:id/settings", verifyFirebaseToken, verifyTeacher, async (req, res) => {
+    const { id } = req.params;
+    const { boss_encounter_rate, ai_strictness } = req.body;
+    
+    try {
+      await db.collection('classes').doc(id).update({
+        boss_encounter_rate,
+        ai_strictness
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating class settings:', error);
+      res.status(500).json({ error: 'Failed to update class settings' });
     }
   });
 
@@ -594,25 +612,47 @@ async function startServer() {
 
   // Step 1: The AI Evaluation API (Backend)
   app.post("/api/study/evaluate-sentence", verifyFirebaseToken, async (req, res) => {
-    const { term, novelNode, studentSentence } = req.body;
+    const { term, novelNode, studentSentence, aiStrictness, isRetry, itemType, incorrectSentence, errorTarget } = req.body;
 
-    if (!term || !studentSentence) {
+    if (!studentSentence) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
-      const prompt = `
-        You are a strict but encouraging high school English teacher.
+      let prompt = `You are a strict but encouraging high school English teacher.`;
+
+      if (itemType === 'grammar') {
+        prompt += `
+        The student was given the following incorrect sentence: "${incorrectSentence}".
+        Their task was to fix the specific grammar error related to: "${errorTarget}".
+        Evaluate their submitted sentence to see if they successfully fixed the error while maintaining the original meaning.
+        
+        Student Sentence: "${studentSentence}"
+        
+        Provide a detailed evaluation.
+        `;
+      } else {
+        prompt += `
         Evaluate the following student sentence to check if the term "${term}" is used grammatically correctly.
         ${novelNode ? `The sentence must also make sense within the context of this novel/topic: "${novelNode}".` : ''}
         
         Student Sentence: "${studentSentence}"
         
         Provide a detailed evaluation.
-      `;
+        `;
+      }
 
+      // Add strictness instructions
+      if (aiStrictness === 'honors') {
+        prompt += `\nBe extremely strict. Require complex syntax, rich context clues, and perfect grammar.`;
+      } else if (aiStrictness === 'lenient') {
+        prompt += `\nBe forgiving of minor grammar errors as long as the student demonstrates they understand the core concept.`;
+      } else {
+        prompt += `\nUse a balanced high-school grading rubric.`;
+      }
+      
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
@@ -623,7 +663,7 @@ async function startServer() {
             properties: {
               isCorrect: {
                 type: Type.BOOLEAN,
-                description: "Whether the term is used correctly and makes sense in context."
+                description: "Whether the submission is correct."
               },
               feedback: {
                 type: Type.STRING,
@@ -635,11 +675,11 @@ async function startServer() {
               },
               correction: {
                 type: Type.STRING,
-                description: "If incorrect, provide a corrected version of the sentence. If correct, provide an even more sophisticated variation."
+                description: "If incorrect, provide a corrected version. If correct, provide an even more sophisticated variation."
               },
               xpAwarded: {
                 type: Type.INTEGER,
-                description: "50 if correct, 10 if incorrect."
+                description: isRetry ? "25 if correct, 10 if incorrect." : "50 if correct, 10 if incorrect."
               }
             },
             required: ["isCorrect", "feedback", "detailedAnalysis", "correction", "xpAwarded"]

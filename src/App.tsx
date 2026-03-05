@@ -23,6 +23,8 @@ interface Cohort {
   is_archived: boolean;
   created_at: string;
   student_count: number;
+  boss_encounter_rate?: number;
+  ai_strictness?: 'lenient' | 'standard' | 'honors';
 }
 
 interface QuestionBankItem {
@@ -505,6 +507,9 @@ function Arena() {
   const [slideDirection, setSlideDirection] = useState<'in' | 'out'>('in');
   const [studentSentence, setStudentSentence] = useState('');
   const [bossFeedback, setBossFeedback] = useState<{isCorrect: boolean, feedback: string, detailedAnalysis?: string, correction?: string, xpAwarded: number} | null>(null);
+  const [cohortSettings, setCohortSettings] = useState<any>(null);
+  const [isRetry, setIsRetry] = useState(false);
+  const [hintUsed, setHintUsed] = useState(false);
 
   const handleReveal = () => {
     setIsFlipping(true);
@@ -524,7 +529,15 @@ function Arena() {
     try {
       const userDoc = await getDoc(doc(db, 'users', userId));
       if (userDoc.exists()) {
-        setUserData(userDoc.data());
+        const data = userDoc.data();
+        setUserData(data);
+        
+        if (data.cohort_id) {
+          const classDoc = await getDoc(doc(db, 'classes', data.cohort_id));
+          if (classDoc.exists()) {
+            setCohortSettings(classDoc.data());
+          }
+        }
       }
     } catch (e) {
       console.error("Error fetching user data:", e);
@@ -628,9 +641,12 @@ function Arena() {
       setSlideDirection('in');
       setBossFeedback(null);
       setStudentSentence('');
+      setIsRetry(false);
+      setHintUsed(false);
       
       const firstItem = items[0];
-      const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < 0.15 || (firstItem.progress?.easeFactor > 2.5));
+      const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
+      const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < encounterChance || (firstItem.progress?.easeFactor > 2.5));
       setSessionState(isBossEncounter ? 'boss' : 'active');
     }
   };
@@ -706,9 +722,12 @@ function Arena() {
           setSlideDirection('in');
           setBossFeedback(null);
           setStudentSentence('');
+          setIsRetry(false);
+          setHintUsed(false);
           
           const nextItem = items[currentIndex + 1];
-          const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < 0.15 || (nextItem.progress?.easeFactor > 2.5));
+          const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
+          const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
           setSessionState(isBossEncounter ? 'boss' : 'active');
         } else {
           setSessionState('victory');
@@ -739,16 +758,32 @@ function Arena() {
         body: JSON.stringify({
           term: currentItem.term,
           novelNode: currentItem.novel_node,
-          studentSentence
+          studentSentence,
+          aiStrictness: cohortSettings?.ai_strictness || 'standard',
+          isRetry,
+          itemType: currentItem.item_type,
+          incorrectSentence: currentItem.incorrect_sentence,
+          errorTarget: currentItem.error_target
         })
       });
 
       if (response.ok) {
         const result = await response.json();
-        setBossFeedback(result);
-        setSessionXp(prev => prev + result.xpAwarded);
+        
+        // Calculate final XP with hint penalty
+        let finalXp = result.xpAwarded;
+        if (hintUsed) {
+          finalXp = Math.max(0, finalXp - 10);
+        }
+        
+        // Update result with final XP for display
+        const finalResult = { ...result, xpAwarded: finalXp };
+        
+        setBossFeedback(finalResult);
+        setSessionXp(prev => prev + finalXp);
         
         // Log the review as a 4 if correct, 1 if incorrect for SM2 progression
+        // If it's a retry and they got it correct, we still log it as a success but maybe with a slightly lower quality score internally if we wanted to be strict, but for now 4 is fine.
         const quality = result.isCorrect ? 4 : 1;
         const responseTimeMs = Date.now() - startTime;
         
@@ -804,9 +839,12 @@ function Arena() {
         setSlideDirection('in');
         setBossFeedback(null);
         setStudentSentence('');
+        setIsRetry(false);
+        setHintUsed(false);
         
         const nextItem = items[currentIndex + 1];
-        const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < 0.15 || (nextItem.progress?.easeFactor > 2.5));
+        const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
+        const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
         setSessionState(isBossEncounter ? 'boss' : 'active');
       } else {
         setSessionState('victory');
@@ -1192,14 +1230,44 @@ function Arena() {
                 {!bossFeedback ? (
                   <div className="space-y-6 w-full text-left">
                     <div className="bg-slate-900/80 p-6 rounded-xl border border-red-500/30">
-                      <label className="block text-sm font-bold text-slate-300 uppercase tracking-widest mb-4">
-                        Write an original sentence using this word.
-                        {currentItem.novel_node && <span className="block mt-1 text-xs text-slate-500 normal-case italic">Context: {currentItem.novel_node}</span>}
-                      </label>
+                      {currentItem.item_type === 'grammar' ? (
+                        <>
+                          <label className="block text-sm font-bold text-slate-300 uppercase tracking-widest mb-4">
+                            Identify and fix the grammatical error in this sentence.
+                          </label>
+                          <div className="bg-red-500/10 border-l-4 border-red-500 p-4 mb-6 rounded-r-lg">
+                            <p className="text-white font-medium italic text-lg">"{currentItem.incorrect_sentence}"</p>
+                          </div>
+                          
+                          {!hintUsed && (
+                            <button 
+                              onClick={() => setHintUsed(true)}
+                              className="text-xs font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest mb-4 flex items-center gap-2 transition-colors"
+                            >
+                              <Sparkles className="w-4 h-4" />
+                              Use Hint (-10 XP)
+                            </button>
+                          )}
+                          
+                          {hintUsed && (
+                            <div className="bg-indigo-500/10 border border-indigo-500/30 p-3 rounded-lg mb-4 animate-in fade-in slide-in-from-top-2">
+                              <p className="text-indigo-300 text-sm font-medium">
+                                <span className="font-bold uppercase tracking-wider mr-2">Hint:</span> 
+                                Look for {currentItem.error_target}
+                              </p>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <label className="block text-sm font-bold text-slate-300 uppercase tracking-widest mb-4">
+                          Write an original sentence using this word.
+                          {currentItem.novel_node && <span className="block mt-1 text-xs text-slate-500 normal-case italic">Context: {currentItem.novel_node}</span>}
+                        </label>
+                      )}
                       <textarea
                         value={studentSentence}
                         onChange={(e) => setStudentSentence(e.target.value)}
-                        placeholder="Type your sentence here..."
+                        placeholder={currentItem.item_type === 'grammar' ? "Type the corrected sentence here..." : "Type your sentence here..."}
                         className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-white placeholder-slate-600 focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none resize-none h-32"
                       />
                     </div>
@@ -1245,12 +1313,26 @@ function Arena() {
                         <span className={`text-xl font-black ${bossFeedback.isCorrect ? 'text-emerald-400' : 'text-slate-300'}`}>+{bossFeedback.xpAwarded}</span>
                       </div>
                     </div>
-                    <button
-                      onClick={handleContinueFromBoss}
-                      className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-5 px-8 rounded-xl border border-slate-600 transition-all"
-                    >
-                      Continue
-                    </button>
+                    <div className="flex flex-col gap-3">
+                      {!bossFeedback.isCorrect && (
+                        <button
+                          onClick={() => {
+                            setBossFeedback(null);
+                            setIsRetry(true);
+                          }}
+                          className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xl py-5 px-8 rounded-xl shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all transform hover:scale-105 flex items-center justify-center gap-3"
+                        >
+                          <Edit3 className="w-6 h-6" />
+                          Try Again (Rewrite for +25 XP)
+                        </button>
+                      )}
+                      <button
+                        onClick={handleContinueFromBoss}
+                        className={`w-full font-bold text-xl py-5 px-8 rounded-xl border transition-all ${!bossFeedback.isCorrect ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600' : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.4)]'}`}
+                      >
+                        {bossFeedback.isCorrect ? 'Continue' : 'Accept Defeat (Continue)'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1314,6 +1396,42 @@ function Dashboard() {
   const [editingItem, setEditingItem] = useState<LearningItem | null>(null);
   const [editTerm, setEditTerm] = useState('');
   const [editDefinition, setEditDefinition] = useState('');
+  const [showClassSettingsModal, setShowClassSettingsModal] = useState(false);
+  const [editingClass, setEditingClass] = useState<Cohort | null>(null);
+  const [encounterRate, setEncounterRate] = useState(15);
+  const [aiStrictness, setAiStrictness] = useState('standard');
+
+  const handleSaveSettings = async () => {
+    if (!editingClass) return;
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/admin/classes/${editingClass.id}/settings`, {
+        method: 'PATCH',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-auth-token': token || '' 
+        },
+        body: JSON.stringify({ 
+          boss_encounter_rate: encounterRate, 
+          ai_strictness: aiStrictness 
+        })
+      });
+      
+      if (response.ok) {
+        setCohorts(prev => prev.map(c => 
+          c.id === editingClass.id 
+            ? { ...c, boss_encounter_rate: encounterRate, ai_strictness: aiStrictness as any } 
+            : c
+        ));
+        setShowClassSettingsModal(false);
+        showToast('Class settings updated successfully!');
+      } else {
+        showToast('Failed to update settings.', 'error');
+      }
+    } catch (e) {
+      showToast('Error saving settings.', 'error');
+    }
+  };
 
   // Roster Drill-Down state
   const [selectedClassDetails, setSelectedClassDetails] = useState<Cohort | null>(null);
@@ -2069,7 +2187,7 @@ function Dashboard() {
                 {/* Top Actions */}
                 <div className="flex flex-col md:flex-row justify-between items-center gap-6 bg-slate-800/50 p-8 rounded-3xl border border-slate-700/50 backdrop-blur-sm shadow-xl">
                   <div className="space-y-1">
-                    <h2 className="text-3xl font-black text-white flex items-center gap-3 tracking-tight">
+                    <h2 className="text-xl font-black text-white flex items-center gap-3 tracking-tight">
                       <Users className="w-8 h-8 text-indigo-400" />
                       CLASS MANAGEMENT
                     </h2>
@@ -2170,6 +2288,69 @@ function Dashboard() {
                   </div>
                 )}
 
+                {/* Class Settings Modal */}
+                {showClassSettingsModal && editingClass && (
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+                    <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-10 max-w-lg w-full shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300 relative">
+                      <button 
+                        onClick={() => setShowClassSettingsModal(false)}
+                        className="absolute top-6 right-6 text-slate-500 hover:text-white transition-colors p-2 hover:bg-slate-800 rounded-full"
+                      >
+                        <X className="w-6 h-6" />
+                      </button>
+                      
+                      <div className="mb-8">
+                        <h3 className="text-3xl font-black text-white tracking-tight uppercase">Class Settings</h3>
+                        <p className="text-slate-400 font-medium">Configure AI behavior for {editingClass.name}.</p>
+                      </div>
+                      
+                      <div className="space-y-8">
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Boss Encounter Rate</label>
+                            <span className="text-indigo-400 font-bold">{encounterRate}% chance</span>
+                          </div>
+                          <input 
+                            type="range" 
+                            min="5" 
+                            max="50" 
+                            value={encounterRate}
+                            onChange={(e) => setEncounterRate(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                          />
+                          <p className="text-xs text-slate-500">Probability of a Boss Card appearing during practice sessions.</p>
+                        </div>
+                        
+                        <div className="space-y-3">
+                          <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">AI Strictness</label>
+                          <div className="relative">
+                            <select 
+                              value={aiStrictness}
+                              onChange={(e) => setAiStrictness(e.target.value)}
+                              className="w-full bg-slate-950 border-2 border-slate-800 rounded-2xl px-6 py-4 text-white font-bold focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all appearance-none"
+                            >
+                              <option value="lenient">Lenient (Focus on basic meaning)</option>
+                              <option value="standard">Standard (Focus on grammar & meaning)</option>
+                              <option value="honors">Honors/AP (Focus on sophisticated syntax)</option>
+                            </select>
+                            <div className="absolute right-6 top-1/2 transform -translate-y-1/2 pointer-events-none text-slate-500">
+                              <ArrowRightLeft className="w-5 h-5 rotate-90" />
+                            </div>
+                          </div>
+                        </div>
+
+                        <button 
+                          onClick={handleSaveSettings}
+                          className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase tracking-[0.15em] py-6 rounded-2xl shadow-[0_0_30px_rgba(79,70,229,0.3)] transition-all flex items-center justify-center gap-3 mt-4 transform hover:scale-[1.02] active:scale-[0.98]"
+                        >
+                          <Save className="w-6 h-6" />
+                          Save Settings
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Class Cards Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                   {cohorts.length === 0 ? (
@@ -2177,7 +2358,7 @@ function Dashboard() {
                       <div className="w-24 h-24 bg-slate-800 rounded-3xl flex items-center justify-center mx-auto mb-8 border-2 border-slate-700 shadow-xl">
                         <UsersRound className="w-12 h-12 text-slate-600" />
                       </div>
-                      <h3 className="text-3xl font-black text-white mb-3 tracking-tight uppercase">No Classes Detected</h3>
+                      <h3 className="text-lg font-black text-white mb-3 tracking-tight uppercase">No Classes Detected</h3>
                       <p className="text-slate-500 max-w-md mx-auto mb-10 font-medium">
                         {showArchived ? "The archives are currently empty." : "Establish your first learning cohort to begin deploying vocabulary challenges."}
                       </p>
@@ -2247,7 +2428,11 @@ function Dashboard() {
                       return (
                         <div 
                           key={cohort.id} 
-                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2`}
+                          onClick={() => {
+                            setSelectedClassDetails(cohort);
+                            fetchClassRoster(cohort.id);
+                          }}
+                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2 cursor-pointer`}
                         >
                           {/* Top Accent Bar */}
                           <div className={`h-2 w-full ${colorStyles.topBar}`}></div>
@@ -2258,13 +2443,28 @@ function Dashboard() {
                                 <UsersRound className={`w-7 h-7 ${colorStyles.accent}`} />
                               </div>
                               <div className="flex gap-2">
+                                <button 
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setEditingClass(cohort);
+                                    setEncounterRate(cohort.boss_encounter_rate || 15);
+                                    setAiStrictness(cohort.ai_strictness || 'standard');
+                                    setShowClassSettingsModal(true);
+                                  }}
+                                  className="p-3 text-slate-600 hover:text-indigo-400 hover:bg-indigo-400/10 rounded-xl transition-all z-10 relative"
+                                  title="Class Settings"
+                                >
+                                  <Settings className="w-5 h-5" />
+                                </button>
                                 {!showArchived && (
                                   <button 
                                     onClick={(e) => {
+                                      e.preventDefault();
                                       e.stopPropagation();
                                       handleArchiveCohort(cohort.id);
                                     }}
-                                    className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all"
+                                    className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all z-10 relative"
                                     title="Archive Class"
                                   >
                                     <Archive className="w-5 h-5" />
@@ -2272,10 +2472,11 @@ function Dashboard() {
                                 )}
                                 <button 
                                   onClick={(e) => {
+                                    e.preventDefault();
                                     e.stopPropagation();
                                     handleDeleteCohort(cohort.id);
                                   }}
-                                  className="p-3 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-xl transition-all"
+                                  className="p-3 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-xl transition-all z-10 relative"
                                   title="Delete Class"
                                 >
                                   <Trash2 className="w-5 h-5" />
@@ -2283,7 +2484,7 @@ function Dashboard() {
                               </div>
                             </div>
 
-                            <h3 className="text-3xl font-black text-white mb-2 tracking-tight uppercase leading-tight">{cohort.name}</h3>
+                            <h3 className="text-lg font-black text-white mb-2 tracking-tight uppercase leading-tight">{cohort.name}</h3>
                             <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mb-8">
                               Created {new Date(cohort.created_at).toLocaleDateString()}
                             </p>
