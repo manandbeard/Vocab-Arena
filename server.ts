@@ -512,6 +512,63 @@ async function startServer() {
     }
   });
 
+  // Phase 18: Global Leaderboard API
+  app.get("/api/leaderboard", verifyFirebaseToken, async (req, res) => {
+    try {
+      // 1. Fetch all students
+      const studentsSnapshot = await db.collection('users').where('role', '==', 'student').get();
+      const allStudents = studentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as { name: string; xp: number; rank: string; cohort_id?: string; cohort_name?: string })
+      }));
+
+      // 2. Fetch all active (non-archived) classes
+      const classesSnapshot = await db.collection('classes').where('is_archived', '==', false).get();
+      const classMap = new Map<string, string>();
+      classesSnapshot.docs.forEach(doc => {
+        classMap.set(doc.id, doc.data().name);
+      });
+
+      // 3. Top Players: sort by xp desc, take top 10
+      const sorted = [...allStudents].sort((a, b) => (b.xp || 0) - (a.xp || 0));
+      const topPlayers = sorted.slice(0, 10).map((student, index) => ({
+        rank: index + 1,
+        name: student.name || 'Unknown',
+        xp: student.xp || 0,
+        playerRank: student.rank || 'Bronze',
+        cohort_name: student.cohort_name || (student.cohort_id ? classMap.get(student.cohort_id) : undefined) || 'No Class'
+      }));
+
+      // 4. Team Standings: group by cohort_id, calculate average XP
+      const cohortGroups = new Map<string, { name: string; students: number[]; }>();
+      allStudents.forEach(student => {
+        const cid = student.cohort_id;
+        if (!cid) return;
+        const cohortName = student.cohort_name || classMap.get(cid) || 'Unknown Class';
+        if (!cohortGroups.has(cid)) {
+          cohortGroups.set(cid, { name: cohortName, students: [] });
+        }
+        cohortGroups.get(cid)!.students.push(student.xp || 0);
+      });
+
+      const teamStandings = Array.from(cohortGroups.entries())
+        .map(([cohortId, data]) => ({
+          cohortId,
+          name: data.name,
+          studentCount: data.students.length,
+          averageXp: data.students.length > 0
+            ? Math.round(data.students.reduce((a, b) => a + b, 0) / data.students.length)
+            : 0
+        }))
+        .sort((a, b) => b.averageXp - a.averageXp);
+
+      res.json({ topPlayers, teamStandings });
+    } catch (error) {
+      console.error('Error fetching leaderboard:', error);
+      res.status(500).json({ error: 'Failed to fetch leaderboard data' });
+    }
+  });
+
   app.patch("/api/admin/student/:userId/move", verifyFirebaseToken, verifyTeacher, async (req, res) => {
     const { userId } = req.params;
     const { newCohortId } = req.body;
