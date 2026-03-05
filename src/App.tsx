@@ -4,7 +4,7 @@ import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, addDoc, getDocs, query, where, orderBy, doc, setDoc, getDoc, Timestamp, deleteDoc } from 'firebase/firestore';
 import { GoogleGenAI } from "@google/genai";
 import { auth, db, googleProvider, isFirebaseConfigured } from './firebase';
-import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus } from 'lucide-react';
+import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus, Archive, Copy } from 'lucide-react';
 
 // --- SM-2 Algorithm ---
 
@@ -1302,6 +1302,7 @@ function Dashboard() {
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [recentItems, setRecentItems] = useState<LearningItem[]>([]);
   const [cohorts, setCohorts] = useState<Cohort[]>([]);
+  const [showCreateClassModal, setShowCreateClassModal] = useState(false);
   const [newCohortName, setNewCohortName] = useState('');
   const [newCohortColor, setNewCohortColor] = useState('indigo');
   const [showArchived, setShowArchived] = useState(false);
@@ -2064,73 +2065,272 @@ function Dashboard() {
         {viewMode === 'deploy' && activeTab === 'classes' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {!selectedClassDetails ? (
-              <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-xl">
-                <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                  <Users className="w-6 h-6 text-indigo-400" />
-                  Class Management
-                </h2>
-                
-                <div className="flex flex-col md:flex-row gap-4 mb-8">
-                  <input 
-                    type="text" 
-                    value={newCohortName}
-                    onChange={(e) => setNewCohortName(e.target.value)}
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Enter Class Name (e.g. 10th Grade Lit)"
-                  />
-                  <button 
-                    onClick={handleCreateCohort}
-                    disabled={isCreatingCohort || !newCohortName.trim()}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    {isCreatingCohort ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-                    Create Class
-                  </button>
+              <div className="space-y-8">
+                {/* Top Actions */}
+                <div className="flex flex-col md:flex-row justify-between items-center gap-6 bg-slate-800/50 p-8 rounded-3xl border border-slate-700/50 backdrop-blur-sm shadow-xl">
+                  <div className="space-y-1">
+                    <h2 className="text-3xl font-black text-white flex items-center gap-3 tracking-tight">
+                      <Users className="w-8 h-8 text-indigo-400" />
+                      CLASS MANAGEMENT
+                    </h2>
+                    <p className="text-slate-400 font-medium">Deploy training modules and monitor student progress.</p>
+                  </div>
+                  <div className="flex items-center gap-6">
+                    <div className="flex bg-slate-950 rounded-xl p-1.5 border border-slate-800 shadow-inner">
+                      <button
+                        onClick={() => setShowArchived(false)}
+                        className={`px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-widest transition-all ${!showArchived ? 'bg-indigo-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.4)]' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        Active
+                      </button>
+                      <button
+                        onClick={() => setShowArchived(true)}
+                        className={`px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-widest transition-all ${showArchived ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        Archived
+                      </button>
+                    </div>
+                    <button 
+                      onClick={() => setShowCreateClassModal(true)}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest py-4 px-8 rounded-2xl shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center gap-3 transform hover:scale-105 active:scale-95"
+                    >
+                      <Plus className="w-6 h-6" />
+                      Create New Class
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {/* Create Class Modal */}
+                {showCreateClassModal && (
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+                    <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-10 max-w-lg w-full shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300 relative">
+                      <button 
+                        onClick={() => setShowCreateClassModal(false)}
+                        className="absolute top-6 right-6 text-slate-500 hover:text-white transition-colors p-2 hover:bg-slate-800 rounded-full"
+                      >
+                        <X className="w-6 h-6" />
+                      </button>
+                      
+                      <div className="mb-8">
+                        <h3 className="text-3xl font-black text-white tracking-tight uppercase">New Class Setup</h3>
+                        <p className="text-slate-400 font-medium">Initialize a new learning cohort.</p>
+                      </div>
+                      
+                      <div className="space-y-8">
+                        <div className="space-y-3">
+                          <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Class Designation</label>
+                          <input 
+                            type="text" 
+                            value={newCohortName}
+                            onChange={(e) => setNewCohortName(e.target.value)}
+                            className="w-full bg-slate-950 border-2 border-slate-800 rounded-2xl px-6 py-5 text-white text-xl font-bold focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-700"
+                            placeholder="e.g. 10th Grade Honors"
+                            autoFocus
+                          />
+                        </div>
+                        
+                        <div className="space-y-3">
+                          <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Theme Identity</label>
+                          <div className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border-2 border-slate-800">
+                            {['indigo', 'emerald', 'rose', 'amber', 'cyan'].map((color) => (
+                              <button
+                                key={color}
+                                onClick={() => setNewCohortColor(color)}
+                                className={`w-14 h-14 rounded-2xl border-4 transition-all transform hover:scale-110 flex items-center justify-center ${
+                                  newCohortColor === color 
+                                    ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-110' 
+                                    : 'border-transparent opacity-40 hover:opacity-100'
+                                }`}
+                              >
+                                <div className={`w-full h-full rounded-xl ${
+                                  color === 'indigo' ? 'bg-indigo-500' : 
+                                  color === 'emerald' ? 'bg-emerald-500' : 
+                                  color === 'rose' ? 'bg-rose-500' : 
+                                  color === 'amber' ? 'bg-amber-500' : 
+                                  'bg-cyan-500'
+                                } shadow-inner`}></div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button 
+                          onClick={() => {
+                            handleCreateCohort();
+                            setShowCreateClassModal(false);
+                          }}
+                          disabled={isCreatingCohort || !newCohortName.trim()}
+                          className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase tracking-[0.15em] py-6 rounded-2xl shadow-[0_0_30px_rgba(79,70,229,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed mt-4 transform hover:scale-[1.02] active:scale-[0.98]"
+                        >
+                          {isCreatingCohort ? <Loader2 className="w-6 h-6 animate-spin" /> : <Plus className="w-6 h-6" />}
+                          Initialize Class
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Class Cards Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                   {cohorts.length === 0 ? (
-                    <div className="col-span-full py-12 text-center bg-slate-900/50 rounded-2xl border-2 border-dashed border-slate-800">
-                      <UsersRound className="w-12 h-12 text-slate-700 mx-auto mb-4" />
-                      <p className="text-slate-500 italic">No classes created yet.</p>
+                    <div className="col-span-full py-32 text-center bg-slate-800/30 rounded-[2.5rem] border-4 border-dashed border-slate-800/50">
+                      <div className="w-24 h-24 bg-slate-800 rounded-3xl flex items-center justify-center mx-auto mb-8 border-2 border-slate-700 shadow-xl">
+                        <UsersRound className="w-12 h-12 text-slate-600" />
+                      </div>
+                      <h3 className="text-3xl font-black text-white mb-3 tracking-tight uppercase">No Classes Detected</h3>
+                      <p className="text-slate-500 max-w-md mx-auto mb-10 font-medium">
+                        {showArchived ? "The archives are currently empty." : "Establish your first learning cohort to begin deploying vocabulary challenges."}
+                      </p>
+                      {!showArchived && (
+                        <button 
+                          onClick={() => setShowCreateClassModal(true)}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase tracking-widest py-4 px-10 rounded-2xl shadow-xl transition-all transform hover:scale-105"
+                        >
+                          Create First Class
+                        </button>
+                      )}
                     </div>
                   ) : (
-                    cohorts.map((cohort) => (
-                      <div 
-                        key={cohort.id} 
-                        onClick={() => {
-                          setSelectedClassDetails(cohort);
-                          fetchClassRoster(cohort.id);
-                        }}
-                        className="bg-slate-900 p-6 rounded-2xl border border-slate-800 hover:border-indigo-500/50 transition-all group cursor-pointer"
-                      >
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="w-12 h-12 bg-indigo-500/10 rounded-xl flex items-center justify-center">
-                            <UsersRound className="w-6 h-6 text-indigo-400" />
+                    cohorts.map((cohort) => {
+                      const themeColor = cohort.theme_color || 'indigo';
+                      
+                      const colorMap = {
+                        indigo: {
+                          accent: 'text-indigo-400',
+                          border: 'border-indigo-500/30',
+                          hoverBorder: 'group-hover:border-indigo-500',
+                          bg: 'bg-indigo-500/5',
+                          glow: 'shadow-[0_0_40px_rgba(99,102,241,0.1)]',
+                          btn: 'bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.3)]',
+                          topBar: 'bg-indigo-500'
+                        },
+                        emerald: {
+                          accent: 'text-emerald-400',
+                          border: 'border-emerald-500/30',
+                          hoverBorder: 'group-hover:border-emerald-500',
+                          bg: 'bg-emerald-500/5',
+                          glow: 'shadow-[0_0_40px_rgba(16,185,129,0.1)]',
+                          btn: 'bg-emerald-600 hover:bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]',
+                          topBar: 'bg-emerald-500'
+                        },
+                        rose: {
+                          accent: 'text-rose-400',
+                          border: 'border-rose-500/30',
+                          hoverBorder: 'group-hover:border-rose-500',
+                          bg: 'bg-rose-500/5',
+                          glow: 'shadow-[0_0_40px_rgba(244,63,94,0.1)]',
+                          btn: 'bg-rose-600 hover:bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]',
+                          topBar: 'bg-rose-500'
+                        },
+                        amber: {
+                          accent: 'text-amber-400',
+                          border: 'border-amber-500/30',
+                          hoverBorder: 'group-hover:border-amber-500',
+                          bg: 'bg-amber-500/5',
+                          glow: 'shadow-[0_0_40px_rgba(245,158,11,0.1)]',
+                          btn: 'bg-amber-600 hover:bg-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)]',
+                          topBar: 'bg-amber-500'
+                        },
+                        cyan: {
+                          accent: 'text-cyan-400',
+                          border: 'border-cyan-500/30',
+                          hoverBorder: 'group-hover:border-cyan-500',
+                          bg: 'bg-cyan-500/5',
+                          glow: 'shadow-[0_0_40px_rgba(6,182,212,0.1)]',
+                          btn: 'bg-cyan-600 hover:bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]',
+                          topBar: 'bg-cyan-500'
+                        }
+                      };
+
+                      const colorStyles = colorMap[themeColor as keyof typeof colorMap] || colorMap.indigo;
+
+                      return (
+                        <div 
+                          key={cohort.id} 
+                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2`}
+                        >
+                          {/* Top Accent Bar */}
+                          <div className={`h-2 w-full ${colorStyles.topBar}`}></div>
+                          
+                          <div className="p-8 flex flex-col h-full">
+                            <div className="flex justify-between items-start mb-8">
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${colorStyles.bg} border border-white/5 shadow-inner`}>
+                                <UsersRound className={`w-7 h-7 ${colorStyles.accent}`} />
+                              </div>
+                              <div className="flex gap-2">
+                                {!showArchived && (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleArchiveCohort(cohort.id);
+                                    }}
+                                    className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all"
+                                    title="Archive Class"
+                                  >
+                                    <Archive className="w-5 h-5" />
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCohort(cohort.id);
+                                  }}
+                                  className="p-3 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-xl transition-all"
+                                  title="Delete Class"
+                                >
+                                  <Trash2 className="w-5 h-5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <h3 className="text-3xl font-black text-white mb-2 tracking-tight uppercase leading-tight">{cohort.name}</h3>
+                            <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mb-8">
+                              Created {new Date(cohort.created_at).toLocaleDateString()}
+                            </p>
+                            
+                            <div className="mb-10 space-y-3">
+                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Access Credentials</label>
+                              <div className="bg-slate-800 p-3 rounded-xl flex items-center justify-between border border-slate-700 shadow-inner group-hover:border-slate-600 transition-all">
+                                <code className={`text-2xl font-mono font-black tracking-[0.2em] ${colorStyles.accent} pl-2`}>
+                                  {cohort.join_code}
+                                </code>
+                                <button 
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(cohort.join_code);
+                                    showToast('Code copied to clipboard!');
+                                  }}
+                                  className="p-2 text-slate-500 hover:text-white hover:bg-slate-700 rounded-lg transition-all"
+                                  title="Copy Code"
+                                >
+                                  <Copy className="w-5 h-5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-auto pt-8 border-t border-slate-800/50 flex items-center justify-between">
+                              <div className="space-y-1">
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Enrollment</p>
+                                <p className="text-3xl font-black text-white tracking-tight">{cohort.student_count || 0}</p>
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  setSelectedClassDetails(cohort);
+                                  fetchClassRoster(cohort.id);
+                                }}
+                                className={`px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-sm transition-all transform hover:scale-105 active:scale-95 text-white ${colorStyles.btn}`}
+                              >
+                                View Roster
+                              </button>
+                            </div>
                           </div>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteCohort(cohort.id);
-                            }}
-                            className="text-slate-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
                         </div>
-                        <h3 className="text-lg font-bold text-white mb-1">{cohort.name}</h3>
-                        <p className="text-xs text-slate-500 mb-4">Created {new Date(cohort.created_at).toLocaleDateString()}</p>
-                        <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Students</span>
-                          <span className="text-sm font-bold text-indigo-400">{cohort.student_count || 0}</span>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
             ) : (
-              <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-xl">
+              <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-xl animate-in slide-in-from-right-8 duration-500">
                 <div className="flex items-center gap-4 mb-6">
                   <button 
                     onClick={() => setSelectedClassDetails(null)}
