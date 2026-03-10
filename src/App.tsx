@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from 'react-router-dom';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, addDoc, getDocs, query, where, orderBy, doc, setDoc, getDoc, Timestamp, deleteDoc } from 'firebase/firestore';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { auth, db, googleProvider, isFirebaseConfigured } from './firebase';
-import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus, Archive, Copy } from 'lucide-react';
+import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus, Archive, Copy, Ghost, Skull, Flame } from 'lucide-react';
 
 // --- SM-2 Algorithm ---
 
@@ -90,6 +90,50 @@ function calculateSM2(
   };
 }
 
+const playSound = (type: 'success' | 'error' | 'boss' | 'level_up') => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    if (type === 'success') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.1); // A5
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.start(); osc.stop(ctx.currentTime + 0.4);
+    } else if (type === 'error') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(150, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.3);
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.start(); osc.stop(ctx.currentTime + 0.3);
+    } else if (type === 'boss') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(100, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.6);
+      gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+      osc.start(); osc.stop(ctx.currentTime + 0.6);
+    } else if (type === 'level_up') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      osc.frequency.setValueAtTime(554.37, ctx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.2);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+      osc.start(); osc.stop(ctx.currentTime + 0.6);
+    }
+  } catch (e) { console.log("Audio blocked by browser policy until user interacts."); }
+};
+
 // --- Components ---
 
 function Navbar() {
@@ -100,6 +144,12 @@ function Navbar() {
   const [currentCohort, setCurrentCohort] = useState<string>('');
   const [isUpdatingCohort, setIsUpdatingCohort] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   const role = localStorage.getItem('role');
   const token = localStorage.getItem('token');
 
@@ -188,6 +238,13 @@ function Navbar() {
               >
                 <Swords className="w-4 h-4" />
                 Arena
+              </Link>
+              <Link 
+                to="/leaderboard" 
+                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${location.pathname === '/leaderboard' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
+              >
+                <Trophy className="w-4 h-4" />
+                Standings
               </Link>
             </div>
           </div>
@@ -510,6 +567,19 @@ function Arena() {
   const [cohortSettings, setCohortSettings] = useState<any>(null);
   const [isRetry, setIsRetry] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
+  const [freeHintUsed, setFreeHintUsed] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const triggerShake = () => {
+    setIsShaking(true);
+    setTimeout(() => setIsShaking(false), 500);
+  };
 
   const handleReveal = () => {
     setIsFlipping(true);
@@ -647,7 +717,80 @@ function Arena() {
       const firstItem = items[0];
       const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
       const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < encounterChance || (firstItem.progress?.easeFactor > 2.5));
+      if (isBossEncounter) {
+        playSound('boss');
+        triggerShake();
+      }
       setSessionState(isBossEncounter ? 'boss' : 'active');
+    }
+  };
+
+  const handleStartEndless = async () => {
+    setIsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/study/endless', {
+        headers: { 'x-auth-token': token || '' }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.length === 0) {
+          alert("No active items found for your class!");
+          setIsLoading(false);
+          return;
+        }
+        setItems(data);
+        setCurrentIndex(0);
+        setSessionXp(0);
+        setStartTime(Date.now());
+        setShowAnswer(false);
+        setSlideDirection('in');
+        setBossFeedback(null);
+        setStudentSentence('');
+        setIsRetry(false);
+        setHintUsed(false);
+        
+        const firstItem = data[0];
+        const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
+        const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < encounterChance);
+        if (isBossEncounter) {
+          playSound('boss');
+          triggerShake();
+        }
+        setSessionState(isBossEncounter ? 'boss' : 'active');
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        setError(errorData.error || "Failed to load endless mode.");
+      }
+    } catch (err: any) {
+      console.error("Error starting endless mode:", err);
+      setError("Failed to load endless mode.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetProgress = async () => {
+    if (!window.confirm("DEV TOOL: Are you sure you want to wipe all your study progress and XP to reset the queue?")) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/dev/reset-progress', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Auth-Token': token || '' 
+        }
+      });
+      
+      if (response.ok) {
+        alert("Progress wiped! Refreshing queue...");
+        fetchItems(); // Reload the queue
+        fetchUserData(); // Reload XP and stats
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -667,6 +810,7 @@ function Arena() {
     setShowAnswer(false);
 
     const responseTimeMs = Date.now() - startTime;
+    playSound(quality >= 3 ? 'success' : 'error');
 
     try {
       const prevProgress = currentItem.progress || {
@@ -694,6 +838,7 @@ function Arena() {
           itemId: currentItem.id,
           score: quality,
           responseTimeMs,
+          isBoss: sessionState === 'boss',
           sm2Result: {
             repetitions: result.repetitions,
             easeFactor: result.easeFactor,
@@ -709,6 +854,7 @@ function Arena() {
         if (data.leveledUp) {
           setNewRank(data.newRank);
           setShowLevelUpModal(true);
+          playSound('level_up');
         }
       }
 
@@ -728,6 +874,10 @@ function Arena() {
           const nextItem = items[currentIndex + 1];
           const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
           const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
+          if (isBossEncounter) {
+            playSound('boss');
+            triggerShake();
+          }
           setSessionState(isBossEncounter ? 'boss' : 'active');
         } else {
           setSessionState('victory');
@@ -749,81 +899,140 @@ function Arena() {
     const currentItem = items[currentIndex];
 
     try {
-      const response = await fetch('/api/study/evaluate-sentence', {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY is not configured.');
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      
+      let prompt = `You are a strict but encouraging high school English teacher.`;
+      const aiStrictness = cohortSettings?.ai_strictness || 'standard';
+
+      if (currentItem.item_type === 'grammar') {
+        prompt += `
+        The student was given the following incorrect sentence: "${currentItem.incorrect_sentence}".
+        Their task was to fix the specific grammar error related to: "${currentItem.error_target}".
+        Evaluate their submitted sentence to see if they successfully fixed the error while maintaining the original meaning.
+        
+        Student Sentence: "${studentSentence}"
+        
+        Provide a detailed evaluation.
+        `;
+      } else {
+        prompt += `
+        Evaluate the following student sentence to check if the term "${currentItem.term}" is used grammatically correctly.
+        ${currentItem.novel_node ? `The sentence must also make sense within the context of this novel/topic: "${currentItem.novel_node}".` : ''}
+        
+        Student Sentence: "${studentSentence}"
+        
+        Provide a detailed evaluation.
+        `;
+      }
+
+      // Add strictness instructions
+      if (aiStrictness === 'honors') {
+        prompt += `\nBe extremely strict. Require complex syntax, rich context clues, and perfect grammar.`;
+      } else if (aiStrictness === 'lenient') {
+        prompt += `\nBe forgiving of minor grammar errors as long as the student demonstrates they understand the core concept.`;
+      } else {
+        prompt += `\nUse a balanced high-school grading rubric.`;
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isCorrect: {
+                type: Type.BOOLEAN,
+                description: "Whether the submission is correct."
+              },
+              feedback: {
+                type: Type.STRING,
+                description: "A short, 1-2 sentence summary of the result."
+              },
+              detailedAnalysis: {
+                type: Type.STRING,
+                description: "A detailed explanation of why the sentence is correct or incorrect, pointing out specific grammatical or contextual nuances."
+              },
+              correction: {
+                type: Type.STRING,
+                description: "If incorrect, provide a corrected version. If correct, provide an even more sophisticated variation."
+              },
+              xpAwarded: {
+                type: Type.INTEGER,
+                description: isRetry ? "25 if correct, 10 if incorrect." : "50 if correct, 10 if incorrect."
+              }
+            },
+            required: ["isCorrect", "feedback", "detailedAnalysis", "correction", "xpAwarded"]
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text || "{}");
+      playSound(result.isCorrect ? 'success' : 'error');
+      
+      // Calculate final XP with hint penalty
+      let finalXp = result.xpAwarded;
+      if (hintUsed && !freeHintUsed) {
+        finalXp = Math.max(0, finalXp - 10);
+      }
+      
+      if (sessionState === 'boss' && result.isCorrect) finalXp += 40;
+      if (isNemesisEncounter && result.isCorrect) {
+        finalXp += 500; // Massive Bounty for slaying a Nemesis
+        showToast("NEMESIS SLAIN! +500 XP", "success");
+      }
+      
+      // Update result with final XP for display
+      const finalResult = { ...result, xpAwarded: finalXp };
+      
+      setBossFeedback(finalResult);
+      setSessionXp(prev => prev + finalXp);
+      
+      const quality = result.isCorrect ? 4 : 1;
+      const responseTimeMs = Date.now() - startTime;
+      
+      const prevProgress = currentItem.progress || {
+        repetitions: 0,
+        easeFactor: 2.5,
+        interval: 0
+      };
+
+      const sm2Result = calculateSM2(
+        quality,
+        prevProgress.repetitions,
+        prevProgress.easeFactor,
+        prevProgress.interval
+      );
+
+      await fetch('/api/study/log-review', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Auth-Token': token || ''
         },
         body: JSON.stringify({
-          term: currentItem.term,
-          novelNode: currentItem.novel_node,
-          studentSentence,
-          aiStrictness: cohortSettings?.ai_strictness || 'standard',
-          isRetry,
-          itemType: currentItem.item_type,
-          incorrectSentence: currentItem.incorrect_sentence,
-          errorTarget: currentItem.error_target
+          itemId: currentItem.id,
+          score: quality,
+          responseTimeMs,
+          isBoss: sessionState === 'boss',
+          xpAwarded: finalXp,
+          sm2Result: {
+            repetitions: sm2Result.repetitions,
+            easeFactor: sm2Result.easeFactor,
+            interval: sm2Result.interval,
+            nextReviewDate: sm2Result.nextReviewDate.toISOString()
+          }
         })
       });
-
-      if (response.ok) {
-        const result = await response.json();
-        
-        // Calculate final XP with hint penalty
-        let finalXp = result.xpAwarded;
-        if (hintUsed) {
-          finalXp = Math.max(0, finalXp - 10);
-        }
-        
-        // Update result with final XP for display
-        const finalResult = { ...result, xpAwarded: finalXp };
-        
-        setBossFeedback(finalResult);
-        setSessionXp(prev => prev + finalXp);
-        
-        // Log the review as a 4 if correct, 1 if incorrect for SM2 progression
-        // If it's a retry and they got it correct, we still log it as a success but maybe with a slightly lower quality score internally if we wanted to be strict, but for now 4 is fine.
-        const quality = result.isCorrect ? 4 : 1;
-        const responseTimeMs = Date.now() - startTime;
-        
-        const prevProgress = currentItem.progress || {
-          repetitions: 0,
-          easeFactor: 2.5,
-          interval: 0
-        };
-
-        const sm2Result = calculateSM2(
-          quality,
-          prevProgress.repetitions,
-          prevProgress.easeFactor,
-          prevProgress.interval
-        );
-
-        await fetch('/api/study/log-review', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Auth-Token': token || ''
-          },
-          body: JSON.stringify({
-            itemId: currentItem.id,
-            score: quality,
-            responseTimeMs,
-            sm2Result: {
-              repetitions: sm2Result.repetitions,
-              easeFactor: sm2Result.easeFactor,
-              interval: sm2Result.interval,
-              nextReviewDate: sm2Result.nextReviewDate.toISOString()
-            }
-          })
-        });
-      } else {
-        alert("Failed to evaluate sentence.");
-      }
     } catch (error) {
       console.error("Error submitting strike:", error);
-      alert("An error occurred.");
+      alert("An error occurred during evaluation.");
     } finally {
       setIsSubmitting(false);
     }
@@ -841,10 +1050,14 @@ function Arena() {
         setStudentSentence('');
         setIsRetry(false);
         setHintUsed(false);
+        setFreeHintUsed(false);
         
         const nextItem = items[currentIndex + 1];
         const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
         const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
+        if (isBossEncounter) {
+          triggerShake();
+        }
         setSessionState(isBossEncounter ? 'boss' : 'active');
       } else {
         setSessionState('victory');
@@ -878,9 +1091,17 @@ function Arena() {
   }
 
   const currentItem = items[currentIndex];
+  const isNemesisEncounter = currentItem?.progress?.is_nemesis;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8 relative overflow-hidden">
+    <div className={`min-h-screen bg-slate-900 text-white p-4 md:p-8 relative overflow-hidden ${isShaking ? 'animate-shake' : ''}`}>
+      {toast && (
+        <div className={`fixed top-4 right-4 ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'} text-white px-6 py-3 rounded-lg shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-4 z-[100]`}>
+          {toast.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <ShieldAlert className="w-5 h-5" />}
+          {toast.message}
+        </div>
+      )}
+
       {showCohortModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/90 backdrop-blur-md">
           <div className="bg-slate-900 border border-indigo-500 rounded-xl p-8 shadow-2xl max-w-lg w-full text-center space-y-8 animate-in zoom-in-95 duration-300">
@@ -1035,12 +1256,109 @@ function Arena() {
               )}
 
               <button 
-                className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold text-lg py-6 px-8 rounded-3xl transition-all flex items-center justify-center gap-3"
-                onClick={() => alert("Endless Practice Mode coming soon!")}
+                onClick={handleStartEndless}
+                className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold text-lg py-6 px-8 rounded-3xl transition-all flex items-center justify-center gap-3 transform hover:scale-[1.02] shadow-lg group"
               >
-                <Sparkles className="w-5 h-5 text-slate-400" />
+                <Sparkles className="w-5 h-5 text-indigo-400 group-hover:animate-pulse" />
                 Endless Practice Mode
               </button>
+
+              {/* DEV TOOL: Reset Progress */}
+              <button 
+                onClick={handleResetProgress}
+                className="w-full mt-4 bg-red-950/30 hover:bg-red-900/50 border border-red-900/50 text-red-500/70 hover:text-red-400 text-xs font-bold py-2 px-4 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                <Trash2 className="w-3 h-3" />
+                DEV: Wipe Save Data & Reset Daily Queue
+              </button>
+            </div>
+
+            {/* Active Bounties & Inventory */}
+            <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 shadow-xl">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-orange-500/20 rounded-lg">
+                    <Swords className="w-6 h-6 text-orange-400" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white">Active Bounties & Inventory</h3>
+                </div>
+                
+                <div className="flex items-center gap-3 bg-slate-900 border border-slate-700 px-4 py-2 rounded-xl">
+                  <FileText className="w-5 h-5 text-indigo-400" />
+                  <span className="text-slate-300 font-bold">Insight Scrolls:</span>
+                  <span className="text-white font-black">{userData?.inventory?.insight_scrolls || 0}</span>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  { id: 'bounty_1', title: 'Slay 3 Grammar Bosses', desc: 'Defeat 3 Bosses', target: 3, current: userData?.quests?.bosses_slain || 0, rewardType: 'scroll', rewardAmount: 1, rewardLabel: '1x Insight Scroll' },
+                  { id: 'bounty_2', title: 'Master 10 Words', desc: 'Master 10 Words', target: 10, current: userData?.quests?.words_mastered || 0, rewardType: 'xp', rewardAmount: 300, rewardLabel: '+300 XP' },
+                  { id: 'bounty_3', title: '5-Day Streak', desc: '5 Day Streak', target: 5, current: userData?.quests?.current_streak || 0, rewardType: 'relic', rewardAmount: 'Streak Master', rewardLabel: 'Relic: Streak Master' }
+                ].map(bounty => {
+                  const isComplete = bounty.current >= bounty.target;
+                  const isClaimed = userData?.quests?.quests_claimed?.includes(bounty.id);
+                  return (
+                    <div key={bounty.id} className="bg-slate-900 border border-slate-700 rounded-xl p-4 flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-white">{bounty.title}</h4>
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="w-32 h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-orange-500" style={{ width: `${Math.min(100, (bounty.current / bounty.target) * 100)}%` }} />
+                          </div>
+                          <span className="text-xs font-mono text-slate-500">{bounty.current}/{bounty.target}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!isComplete || isClaimed) return;
+                          try {
+                            const token = localStorage.getItem('token');
+                            const res = await fetch('/api/study/claim-bounty', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token || '' },
+                              body: JSON.stringify({ bountyId: bounty.id, rewardType: bounty.rewardType, rewardAmount: bounty.rewardAmount })
+                            });
+                            if (res.ok) fetchUserData();
+                          } catch (e) { console.error(e); }
+                        }}
+                        disabled={!isComplete || isClaimed}
+                        className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${
+                          isClaimed ? 'bg-slate-800 text-slate-500 border border-slate-700' :
+                          isComplete ? 'bg-orange-600 hover:bg-orange-500 text-white shadow-[0_0_15px_rgba(249,115,22,0.4)]' :
+                          'bg-slate-800 text-slate-500 border border-slate-700'
+                        }`}
+                      >
+                        {isClaimed ? 'Claimed' : isComplete ? 'Claim Reward' : bounty.rewardLabel}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Trophies & Relics */}
+            <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 shadow-xl">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 bg-yellow-500/20 rounded-lg">
+                  <Trophy className="w-6 h-6 text-yellow-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white">Relics & Trophies</h3>
+              </div>
+              {userData?.relics?.length > 0 ? (
+                <div className="flex flex-wrap gap-3">
+                  {userData.relics.map((relic: string, idx: number) => (
+                    <div key={idx} className="bg-gradient-to-br from-yellow-500/20 to-orange-500/20 border border-yellow-500/30 px-4 py-2 rounded-xl flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-yellow-400" />
+                      <span className="font-bold text-yellow-100">{relic}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-center py-8 border-2 border-dashed border-slate-700 rounded-xl">
+                  Complete bounties and boss encounters to earn relics.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -1068,22 +1386,50 @@ function Arena() {
             className={`flex-1 flex items-center justify-center ${
             slideDirection === 'in' ? 'animate-slide-in-right' : 'transition-all duration-300 transform -translate-x-full opacity-0'
           }`}>
-            <div className={`perspective-1000 w-full max-w-2xl mx-auto transition-transform duration-500 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)] ${isFlipping ? 'scale-105' : 'scale-100'}`}>
-              <div className={`relative w-full transition-all duration-500 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)] [transform-style:preserve-3d] ${showAnswer ? 'rotate-y-180' : ''} ${isFlipping ? 'shadow-2xl' : 'shadow-xl'}`}>
-                
-                {/* Front */}
-                <div className={`absolute inset-0 w-full h-full backface-hidden bg-slate-800 rounded-3xl border border-slate-700 p-8 md:p-12 flex flex-col items-center justify-center ${showAnswer ? 'pointer-events-none' : ''}`}>
-                  <div className="absolute top-6 right-6">
-                    <span className={`text-xs uppercase tracking-widest font-bold px-3 py-1 rounded-full ${currentItem.item_type === 'vocab' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                      {currentItem.item_type}
-                    </span>
+            <div className="w-full max-w-2xl mx-auto">
+              {/* Nemesis Monster Entity (Pixel Art) */}
+              {isNemesisEncounter && (
+                <div className="flex flex-col items-center mb-6 animate-in zoom-in duration-1000">
+                  <div className="relative">
+                    {/* The Ominous Red Aura (Tailwind Pulse) */}
+                    <div className="absolute inset-0 bg-red-600 blur-[40px] opacity-60 animate-pulse rounded-full scale-125" />
+                    
+                    {/* The actual 8-bit Monster Sprite */}
+                    <img 
+                      src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=nemesis&backgroundColor=transparent&eyes=bulging,frame1,frame2,shade,side,star,top&mouth=bite,diagram,grill,smile,square01,square02"
+                      alt="8-Bit Nemesis Monster"
+                      className="w-48 h-48 relative z-10 animate-[bounce_4s_infinite] drop-shadow-[0_0_20px_rgba(220,38,38,1.0)] pixelated"
+                      referrerPolicy="no-referrer"
+                    />
                   </div>
+                  <h3 className="text-red-600 font-black tracking-[0.4em] uppercase mt-4 text-2xl animate-pulse drop-shadow-[0_0_10px_rgba(220,38,38,0.8)]">
+                    Nemesis Spawned
+                  </h3>
+                </div>
+              )}
 
-                  <div className="text-center space-y-10 w-full">
-                    <div className="space-y-6">
-                      <h2 className="text-sm text-slate-400 uppercase tracking-widest font-bold">
-                        {currentQuestion?.type === 'grammar' ? 'Spot the Bug' : currentQuestion?.type?.replace('_', ' ')}
-                      </h2>
+              <div className={`perspective-1000 transition-transform duration-500 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)] ${isFlipping ? 'scale-105' : 'scale-100'}`}>
+                <div className={`relative w-full transition-all duration-500 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)] [transform-style:preserve-3d] ${showAnswer ? 'rotate-y-180' : ''} ${isFlipping ? 'shadow-2xl' : 'shadow-xl'}`}>
+                  
+                  {/* Front */}
+                  <div className={`absolute inset-0 w-full h-full backface-hidden bg-slate-800 border-2 rounded-2xl p-8 md:p-12 shadow-2xl relative overflow-hidden transition-colors duration-500 ${isNemesisEncounter ? 'border-red-900/50 shadow-[0_0_50px_rgba(220,38,38,0.15)]' : 'border-slate-700'} ${showAnswer ? 'pointer-events-none' : ''}`}>
+                    
+                    {/* Nemesis Background Blood-Moon Effect */}
+                    {isNemesisEncounter && (
+                      <div className="absolute inset-0 bg-gradient-to-b from-red-950/20 to-transparent pointer-events-none" />
+                    )}
+
+                    <div className="absolute top-6 right-6 z-20">
+                      <span className={`text-xs uppercase tracking-widest font-bold px-3 py-1 rounded-full ${currentItem.item_type === 'vocab' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                        {currentItem.item_type}
+                      </span>
+                    </div>
+
+                    <div className="text-center space-y-10 w-full relative z-10">
+                      <div className="space-y-6">
+                        <h2 className="text-sm text-slate-400 uppercase tracking-widest font-bold">
+                          {currentQuestion?.type === 'grammar' ? 'Spot the Bug' : currentQuestion?.type?.replace('_', ' ')}
+                        </h2>
                       <div className="flex items-center justify-center gap-4">
                         <p className="text-3xl md:text-4xl font-medium leading-relaxed italic text-white">
                           {currentQuestion?.prompt_text}
@@ -1197,6 +1543,7 @@ function Arena() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
       {sessionState === 'boss' && currentItem && (
@@ -1215,10 +1562,38 @@ function Arena() {
           </div>
 
           <div className={`flex-1 flex items-center justify-center ${slideDirection === 'in' ? 'animate-slide-in-right' : 'transition-all duration-300 transform -translate-x-full opacity-0'}`}>
-            <div className="w-full max-w-2xl mx-auto bg-slate-950 rounded-3xl border-2 border-red-500 p-8 md:p-12 shadow-[0_0_30px_rgba(239,68,68,0.4)] flex flex-col items-center justify-center relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-red-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-              
-              <div className="relative z-10 w-full text-center space-y-8">
+            <div className="w-full max-w-2xl mx-auto">
+              {/* Nemesis Monster Entity (Pixel Art) */}
+              {isNemesisEncounter && (
+                <div className="flex flex-col items-center mb-6 animate-in zoom-in duration-1000">
+                  <div className="relative">
+                    {/* The Ominous Red Aura (Tailwind Pulse) */}
+                    <div className="absolute inset-0 bg-red-600 blur-[40px] opacity-60 animate-pulse rounded-full scale-125" />
+                    
+                    {/* The actual 8-bit Monster Sprite */}
+                    <img 
+                      src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=nemesis&backgroundColor=transparent&eyes=bulging,frame1,frame2,shade,side,star,top&mouth=bite,diagram,grill,smile,square01,square02"
+                      alt="8-Bit Nemesis Monster"
+                      className="w-48 h-48 relative z-10 animate-[bounce_4s_infinite] drop-shadow-[0_0_20px_rgba(220,38,38,1.0)] pixelated"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <h3 className="text-red-600 font-black tracking-[0.4em] uppercase mt-4 text-2xl animate-pulse drop-shadow-[0_0_10px_rgba(220,38,38,0.8)]">
+                    Nemesis Spawned
+                  </h3>
+                </div>
+              )}
+
+              <div className={`bg-slate-800 border-2 rounded-2xl p-8 md:p-12 shadow-2xl relative overflow-hidden transition-colors duration-500 ${isNemesisEncounter ? 'border-red-900/50 shadow-[0_0_50px_rgba(220,38,38,0.15)]' : sessionState === 'boss' ? 'border-indigo-500/30' : 'border-slate-700'} flex flex-col items-center justify-center`}>
+                
+                {/* Nemesis Background Blood-Moon Effect */}
+                {isNemesisEncounter && (
+                  <div className="absolute inset-0 bg-gradient-to-b from-red-950/20 to-transparent pointer-events-none" />
+                )}
+
+                <div className="absolute top-0 right-0 w-64 h-64 bg-red-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+                
+                <div className="relative z-10 w-full text-center space-y-8">
                 <div className="space-y-4">
                   <ShieldAlert className="w-16 h-16 text-red-500 mx-auto animate-pulse" />
                   <h2 className="text-5xl md:text-6xl font-black text-white tracking-tight uppercase drop-shadow-[0_0_15px_rgba(239,68,68,0.8)]">
@@ -1239,17 +1614,30 @@ function Arena() {
                             <p className="text-white font-medium italic text-lg">"{currentItem.incorrect_sentence}"</p>
                           </div>
                           
-                          {!hintUsed && (
+                          {!hintUsed && !freeHintUsed && (
                             <button 
-                              onClick={() => setHintUsed(true)}
+                              onClick={() => {
+                                if (userData?.inventory?.insight_scrolls > 0) {
+                                  setFreeHintUsed(true);
+                                  setUserData((prev: any) => ({
+                                    ...prev,
+                                    inventory: {
+                                      ...prev.inventory,
+                                      insight_scrolls: prev.inventory.insight_scrolls - 1
+                                    }
+                                  }));
+                                } else {
+                                  setHintUsed(true);
+                                }
+                              }}
                               className="text-xs font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest mb-4 flex items-center gap-2 transition-colors"
                             >
                               <Sparkles className="w-4 h-4" />
-                              Use Hint (-10 XP)
+                              {userData?.inventory?.insight_scrolls > 0 ? "Use Insight Scroll (Free Hint)" : "Use Hint (-10 XP)"}
                             </button>
                           )}
                           
-                          {hintUsed && (
+                          {(hintUsed || freeHintUsed) && (
                             <div className="bg-indigo-500/10 border border-indigo-500/30 p-3 rounded-lg mb-4 animate-in fade-in slide-in-from-top-2">
                               <p className="text-indigo-300 text-sm font-medium">
                                 <span className="font-bold uppercase tracking-wider mr-2">Hint:</span> 
@@ -1339,6 +1727,7 @@ function Arena() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
       {sessionState === 'victory' && (
@@ -1383,6 +1772,22 @@ function Dashboard() {
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [recentItems, setRecentItems] = useState<LearningItem[]>([]);
+  const colorMap = {
+    indigo: { accent: 'text-indigo-400', border: 'border-indigo-500/30', hoverBorder: 'group-hover:border-indigo-500', bg: 'bg-indigo-500/5', glow: 'shadow-[0_0_40px_rgba(99,102,241,0.1)]', btn: 'bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.3)]', topBar: 'bg-indigo-500', base: 'bg-indigo-500' },
+    emerald: { accent: 'text-emerald-400', border: 'border-emerald-500/30', hoverBorder: 'group-hover:border-emerald-500', bg: 'bg-emerald-500/5', glow: 'shadow-[0_0_40px_rgba(16,185,129,0.1)]', btn: 'bg-emerald-600 hover:bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]', topBar: 'bg-emerald-500', base: 'bg-emerald-500' },
+    rose: { accent: 'text-rose-400', border: 'border-rose-500/30', hoverBorder: 'group-hover:border-rose-500', bg: 'bg-rose-500/5', glow: 'shadow-[0_0_40px_rgba(244,63,94,0.1)]', btn: 'bg-rose-600 hover:bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]', topBar: 'bg-rose-500', base: 'bg-rose-500' },
+    amber: { accent: 'text-amber-400', border: 'border-amber-500/30', hoverBorder: 'group-hover:border-amber-500', bg: 'bg-amber-500/5', glow: 'shadow-[0_0_40px_rgba(245,158,11,0.1)]', btn: 'bg-amber-600 hover:bg-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)]', topBar: 'bg-amber-500', base: 'bg-amber-500' },
+    cyan: { accent: 'text-cyan-400', border: 'border-cyan-500/30', hoverBorder: 'group-hover:border-cyan-500', bg: 'bg-cyan-500/5', glow: 'shadow-[0_0_40px_rgba(6,182,212,0.1)]', btn: 'bg-cyan-600 hover:bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]', topBar: 'bg-cyan-500', base: 'bg-cyan-500' },
+    violet: { accent: 'text-violet-400', border: 'border-violet-500/30', hoverBorder: 'group-hover:border-violet-500', bg: 'bg-violet-500/5', glow: 'shadow-[0_0_40px_rgba(139,92,246,0.1)]', btn: 'bg-violet-600 hover:bg-violet-500 shadow-[0_0_15px_rgba(139,92,246,0.3)]', topBar: 'bg-violet-500', base: 'bg-violet-500' },
+    fuchsia: { accent: 'text-fuchsia-400', border: 'border-fuchsia-500/30', hoverBorder: 'group-hover:border-fuchsia-500', bg: 'bg-fuchsia-500/5', glow: 'shadow-[0_0_40px_rgba(217,70,239,0.1)]', btn: 'bg-fuchsia-600 hover:bg-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.3)]', topBar: 'bg-fuchsia-500', base: 'bg-fuchsia-500' },
+    pink: { accent: 'text-pink-400', border: 'border-pink-500/30', hoverBorder: 'group-hover:border-pink-500', bg: 'bg-pink-500/5', glow: 'shadow-[0_0_40px_rgba(236,72,153,0.1)]', btn: 'bg-pink-600 hover:bg-pink-500 shadow-[0_0_15px_rgba(236,72,153,0.3)]', topBar: 'bg-pink-500', base: 'bg-pink-500' },
+    orange: { accent: 'text-orange-400', border: 'border-orange-500/30', hoverBorder: 'group-hover:border-orange-500', bg: 'bg-orange-500/5', glow: 'shadow-[0_0_40px_rgba(249,115,22,0.1)]', btn: 'bg-orange-600 hover:bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.3)]', topBar: 'bg-orange-500', base: 'bg-orange-500' },
+    lime: { accent: 'text-lime-400', border: 'border-lime-500/30', hoverBorder: 'group-hover:border-lime-500', bg: 'bg-lime-500/5', glow: 'shadow-[0_0_40px_rgba(132,204,22,0.1)]', btn: 'bg-lime-600 hover:bg-lime-500 shadow-[0_0_15px_rgba(132,204,22,0.3)]', topBar: 'bg-lime-500', base: 'bg-lime-500' },
+    teal: { accent: 'text-teal-400', border: 'border-teal-500/30', hoverBorder: 'group-hover:border-teal-500', bg: 'bg-teal-500/5', glow: 'shadow-[0_0_40px_rgba(20,184,166,0.1)]', btn: 'bg-teal-600 hover:bg-teal-500 shadow-[0_0_15px_rgba(20,184,166,0.3)]', topBar: 'bg-teal-500', base: 'bg-teal-500' },
+    sky: { accent: 'text-sky-400', border: 'border-sky-500/30', hoverBorder: 'group-hover:border-sky-500', bg: 'bg-sky-500/5', glow: 'shadow-[0_0_40px_rgba(14,165,233,0.1)]', btn: 'bg-sky-600 hover:bg-sky-500 shadow-[0_0_15px_rgba(14,165,233,0.3)]', topBar: 'bg-sky-500', base: 'bg-sky-500' },
+    slate: { accent: 'text-slate-400', border: 'border-slate-500/30', hoverBorder: 'group-hover:border-slate-500', bg: 'bg-slate-500/5', glow: 'shadow-[0_0_40px_rgba(100,116,139,0.1)]', btn: 'bg-slate-600 hover:bg-slate-500 shadow-[0_0_15px_rgba(100,116,139,0.3)]', topBar: 'bg-slate-500', base: 'bg-slate-500' }
+  };
+
   const [cohorts, setCohorts] = useState<Cohort[]>([]);
   const [showCreateClassModal, setShowCreateClassModal] = useState(false);
   const [newCohortName, setNewCohortName] = useState('');
@@ -1393,19 +1798,40 @@ function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterClass, setFilterClass] = useState('');
   const [filterNovel, setFilterNovel] = useState('');
+  const [rosterSearch, setRosterSearch] = useState('');
+  const [rosterFilter, setRosterFilter] = useState('');
   const [editingItem, setEditingItem] = useState<LearningItem | null>(null);
-  const [editTerm, setEditTerm] = useState('');
-  const [editDefinition, setEditDefinition] = useState('');
+  const [editForm, setEditForm] = useState<any>({});
   const [showClassSettingsModal, setShowClassSettingsModal] = useState(false);
   const [editingClass, setEditingClass] = useState<Cohort | null>(null);
+  const [editingClassName, setEditingClassName] = useState('');
+  const [editingClassColor, setEditingClassColor] = useState('indigo');
   const [encounterRate, setEncounterRate] = useState(15);
   const [aiStrictness, setAiStrictness] = useState('standard');
+  const [archivingClass, setArchivingClass] = useState<Cohort | null>(null);
+  const [deletingClass, setDeletingClass] = useState<Cohort | null>(null);
+  const [deletingContent, setDeletingContent] = useState<LearningItem | null>(null);
 
   const handleSaveSettings = async () => {
     if (!editingClass) return;
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/admin/classes/${editingClass.id}/settings`, {
+      
+      // Update name and color
+      const detailsResponse = await fetch(`/api/admin/classes/${editingClass.id}`, {
+        method: 'PATCH',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-auth-token': token || '' 
+        },
+        body: JSON.stringify({ 
+          name: editingClassName,
+          theme_color: editingClassColor
+        })
+      });
+
+      // Update settings
+      const settingsResponse = await fetch(`/api/admin/classes/${editingClass.id}/settings`, {
         method: 'PATCH',
         headers: { 
           'Content-Type': 'application/json',
@@ -1417,19 +1843,19 @@ function Dashboard() {
         })
       });
       
-      if (response.ok) {
+      if (detailsResponse.ok && settingsResponse.ok) {
         setCohorts(prev => prev.map(c => 
           c.id === editingClass.id 
-            ? { ...c, boss_encounter_rate: encounterRate, ai_strictness: aiStrictness as any } 
+            ? { ...c, name: editingClassName, theme_color: editingClassColor, boss_encounter_rate: encounterRate, ai_strictness: aiStrictness as any } 
             : c
         ));
         setShowClassSettingsModal(false);
-        showToast('Class settings updated successfully!');
+        showToast('Class updated successfully!');
       } else {
-        showToast('Failed to update settings.', 'error');
+        showToast('Failed to update class.', 'error');
       }
     } catch (e) {
-      showToast('Error saving settings.', 'error');
+      showToast('Error saving class.', 'error');
     }
   };
 
@@ -1488,6 +1914,7 @@ function Dashboard() {
         if (selectedClassDetails) {
           fetchClassRoster(selectedClassDetails.id);
         }
+        if (viewMode === 'analytics') fetchRoster();
         showToast('Student moved successfully', 'success');
       }
     } catch (e) {
@@ -1509,6 +1936,7 @@ function Dashboard() {
         if (selectedClassDetails) {
           fetchClassRoster(selectedClassDetails.id);
         }
+        if (viewMode === 'analytics') fetchRoster();
         showToast('Student removed successfully', 'success');
       }
     } catch (e) {
@@ -1629,7 +2057,6 @@ function Dashboard() {
   };
 
   const handleArchiveCohort = async (id: string) => {
-    if (!window.confirm('Are you sure you want to archive this class?')) return;
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(`/api/admin/classes/${id}/archive`, {
@@ -1639,6 +2066,7 @@ function Dashboard() {
       if (response.ok) {
         await fetchCohorts();
         showToast('Class archived successfully!');
+        setArchivingClass(null);
       }
     } catch (e) {
       showToast('Failed to archive class.', 'error');
@@ -1646,7 +2074,6 @@ function Dashboard() {
   };
 
   const handleDeleteCohort = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this class? This action cannot be undone.')) return;
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(`/api/admin/classes/${id}`, {
@@ -1657,6 +2084,7 @@ function Dashboard() {
       if (response.ok) {
         await fetchCohorts();
         showToast('Class deleted successfully!');
+        setDeletingClass(null);
       } else {
         throw new Error('Failed to delete class');
       }
@@ -1667,11 +2095,12 @@ function Dashboard() {
   };
 
   const handleDeleteContent = async (id: string) => {
-    if (!db || !window.confirm('Are you sure you want to delete this learning item?')) return;
+    if (!db) return;
     try {
       await deleteDoc(doc(db, 'learning_items', id));
       await fetchRecent();
       showToast('Content deleted successfully!');
+      setDeletingContent(null);
     } catch (e) {
       console.error(e);
       showToast('Failed to delete content.', 'error');
@@ -1709,7 +2138,7 @@ function Dashboard() {
           'Content-Type': 'application/json',
           'x-auth-token': token || ''
         },
-        body: JSON.stringify({ term: editTerm, definition: editDefinition })
+        body: JSON.stringify(editForm)
       });
       if (response.ok) {
         showToast('Content updated successfully!');
@@ -1761,32 +2190,36 @@ function Dashboard() {
       const ai = new GoogleGenAI({ apiKey });
       const prompt = `
         Generate a high-school level ${itemType} learning item for the term "${term}".
-        Context/Novel: ${novelNode || 'General Academic'}.
+        Context/Theme: ${novelNode || 'General Academic'}.
+        
+        CRITICAL SYSTEM CONSTRAINTS:
+        1. NO SPOILERS: You MUST NOT reveal plot twists, major events, or ending details from the novel. Use only general themes, setting descriptions, or early-story character traits. Act as a vague teaser, not a summary.
+        2. CONCISE LENGTH: Keep EVERY generated sentence incredibly short and punchy. Maximum 15-20 words per sentence.
         
         Return strictly valid JSON with the following schema:
         {
-          "definition": "Clear, academic definition",
+          "definition": "Clear, concise, academic definition",
           "part_of_speech": "e.g. Noun, Verb",
           "question_bank": [
             {
               "type": "cloze",
-              "prompt_text": "A fill-in-the-blank sentence tied to the Context/Novel. Replace the term with underscores (_____).",
+              "prompt_text": "A short, spoiler-free fill-in-the-blank sentence tied to the context. Replace the term with underscores (_____).",
               "answer_text": "The full sentence with the term included."
             },
             {
               "type": "application",
-              "prompt_text": "A conceptual question (e.g., 'Which character\\'s action in [Novel Node] best demonstrates [Term]?').",
-              "answer_text": "The answer to the conceptual question."
+              "prompt_text": "A brief, 1-sentence conceptual question about a general theme or early character trait related to the term.",
+              "answer_text": "A short, spoiler-free answer."
             },
             {
               "type": "synonym_context",
-              "prompt_text": "A sentence using a synonym, asking the student to identify the target vocabulary word that could replace it.",
+              "prompt_text": "A short, spoiler-free sentence using a synonym, asking the student to identify the target vocabulary word.",
               "answer_text": "The target vocabulary word."
             }
           ],
-          "incorrect_sentence": "${itemType === 'grammar' ? 'A sentence containing the specific grammar error.' : ''}",
+          "incorrect_sentence": "${itemType === 'grammar' ? 'A short, 10-15 word sentence containing the specific grammar error.' : ''}",
           "error_target": "${itemType === 'grammar' ? 'The specific part of the incorrect sentence that is wrong.' : ''}",
-          "corrected_sentence": "${itemType === 'grammar' ? 'The corrected version of the sentence.' : ''}"
+          "corrected_sentence": "${itemType === 'grammar' ? 'The corrected version of the short sentence.' : ''}"
         }
       `;
 
@@ -2258,24 +2691,18 @@ function Dashboard() {
                         
                         <div className="space-y-3">
                           <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Theme Identity</label>
-                          <div className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border-2 border-slate-800">
-                            {['indigo', 'emerald', 'rose', 'amber', 'cyan'].map((color) => (
+                          <div className="grid grid-cols-6 gap-3 bg-slate-950 p-4 rounded-2xl border-2 border-slate-800">
+                            {Object.keys(colorMap).map((color) => (
                               <button
                                 key={color}
                                 onClick={() => setNewCohortColor(color)}
-                                className={`w-14 h-14 rounded-2xl border-4 transition-all transform hover:scale-110 flex items-center justify-center ${
+                                className={`w-12 h-12 rounded-2xl border-4 transition-all transform hover:scale-110 flex items-center justify-center ${
                                   newCohortColor === color 
                                     ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-110' 
                                     : 'border-transparent opacity-40 hover:opacity-100'
                                 }`}
                               >
-                                <div className={`w-full h-full rounded-xl ${
-                                  color === 'indigo' ? 'bg-indigo-500' : 
-                                  color === 'emerald' ? 'bg-emerald-500' : 
-                                  color === 'rose' ? 'bg-rose-500' : 
-                                  color === 'amber' ? 'bg-amber-500' : 
-                                  'bg-cyan-500'
-                                } shadow-inner`}></div>
+                                <div className={`w-full h-full rounded-xl ${colorMap[color as keyof typeof colorMap].base} shadow-inner`}></div>
                               </button>
                             ))}
                           </div>
@@ -2314,6 +2741,36 @@ function Dashboard() {
                       </div>
                       
                       <div className="space-y-8">
+                        <div className="space-y-3">
+                          <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Class Designation</label>
+                          <input 
+                            type="text" 
+                            value={editingClassName}
+                            onChange={(e) => setEditingClassName(e.target.value)}
+                            className="w-full bg-slate-950 border-2 border-slate-800 rounded-2xl px-6 py-4 text-white font-bold focus:ring-4 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-700"
+                            placeholder="e.g. 10th Grade Honors"
+                          />
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Theme Identity</label>
+                          <div className="grid grid-cols-6 gap-3 bg-slate-950 p-4 rounded-2xl border-2 border-slate-800">
+                            {Object.keys(colorMap).map((color) => (
+                              <button
+                                key={color}
+                                onClick={() => setEditingClassColor(color)}
+                                className={`w-10 h-10 rounded-xl border-4 transition-all transform hover:scale-110 flex items-center justify-center ${
+                                  editingClassColor === color 
+                                    ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-110' 
+                                    : 'border-transparent opacity-40 hover:opacity-100'
+                                }`}
+                              >
+                                <div className={`w-full h-full rounded-lg ${colorMap[color as keyof typeof colorMap].base} shadow-inner`}></div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         <div className="space-y-3">
                           <div className="flex justify-between items-center">
                             <label className="block text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Boss Encounter Rate</label>
@@ -2383,119 +2840,72 @@ function Dashboard() {
                   ) : (
                     cohorts.map((cohort) => {
                       const themeColor = cohort.theme_color || 'indigo';
-                      
-                      const colorMap = {
-                        indigo: {
-                          accent: 'text-indigo-400',
-                          border: 'border-indigo-500/30',
-                          hoverBorder: 'group-hover:border-indigo-500',
-                          bg: 'bg-indigo-500/5',
-                          glow: 'shadow-[0_0_40px_rgba(99,102,241,0.1)]',
-                          btn: 'bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.3)]',
-                          topBar: 'bg-indigo-500'
-                        },
-                        emerald: {
-                          accent: 'text-emerald-400',
-                          border: 'border-emerald-500/30',
-                          hoverBorder: 'group-hover:border-emerald-500',
-                          bg: 'bg-emerald-500/5',
-                          glow: 'shadow-[0_0_40px_rgba(16,185,129,0.1)]',
-                          btn: 'bg-emerald-600 hover:bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]',
-                          topBar: 'bg-emerald-500'
-                        },
-                        rose: {
-                          accent: 'text-rose-400',
-                          border: 'border-rose-500/30',
-                          hoverBorder: 'group-hover:border-rose-500',
-                          bg: 'bg-rose-500/5',
-                          glow: 'shadow-[0_0_40px_rgba(244,63,94,0.1)]',
-                          btn: 'bg-rose-600 hover:bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]',
-                          topBar: 'bg-rose-500'
-                        },
-                        amber: {
-                          accent: 'text-amber-400',
-                          border: 'border-amber-500/30',
-                          hoverBorder: 'group-hover:border-amber-500',
-                          bg: 'bg-amber-500/5',
-                          glow: 'shadow-[0_0_40px_rgba(245,158,11,0.1)]',
-                          btn: 'bg-amber-600 hover:bg-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)]',
-                          topBar: 'bg-amber-500'
-                        },
-                        cyan: {
-                          accent: 'text-cyan-400',
-                          border: 'border-cyan-500/30',
-                          hoverBorder: 'group-hover:border-cyan-500',
-                          bg: 'bg-cyan-500/5',
-                          glow: 'shadow-[0_0_40px_rgba(6,182,212,0.1)]',
-                          btn: 'bg-cyan-600 hover:bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]',
-                          topBar: 'bg-cyan-500'
-                        }
-                      };
-
                       const colorStyles = colorMap[themeColor as keyof typeof colorMap] || colorMap.indigo;
 
                       return (
                         <div 
                           key={cohort.id} 
-                          className={`relative bg-slate-900 rounded-[2.5rem] border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-500 group flex flex-col overflow-hidden h-full transform hover:-translate-y-2`}
+                          className={`relative bg-slate-900 rounded-2xl border-2 ${colorStyles.border} ${colorStyles.hoverBorder} ${colorStyles.glow} transition-all duration-300 group flex flex-col overflow-hidden h-full transform hover:-translate-y-1`}
                         >
                           {/* Top Accent Bar */}
-                          <div className={`h-2 w-full ${colorStyles.topBar}`}></div>
+                          <div className={`h-1 w-full ${colorStyles.topBar}`}></div>
                           
-                          <div className="p-8 flex flex-col h-full">
-                            <div className="flex justify-between items-start mb-8">
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${colorStyles.bg} border border-white/5 shadow-inner`}>
-                                <UsersRound className={`w-7 h-7 ${colorStyles.accent}`} />
+                          <div className="p-5 flex flex-col h-full">
+                            <div className="flex justify-between items-start mb-4">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colorStyles.bg} border border-white/5 shadow-inner`}>
+                                <UsersRound className={`w-5 h-5 ${colorStyles.accent}`} />
                               </div>
-                              <div className="flex gap-2">
+                              <div className="flex gap-1">
                                 <button 
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     setEditingClass(cohort);
+                                    setEditingClassName(cohort.name);
+                                    setEditingClassColor(cohort.theme_color || 'indigo');
                                     setEncounterRate(cohort.boss_encounter_rate || 15);
                                     setAiStrictness(cohort.ai_strictness || 'standard');
                                     setShowClassSettingsModal(true);
                                   }}
-                                  className="p-3 text-slate-600 hover:text-indigo-400 hover:bg-indigo-400/10 rounded-xl transition-all z-10 relative"
+                                  className="p-2 text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10 rounded-lg transition-all z-10 relative"
                                   title="Class Settings"
                                 >
-                                  <Settings className="w-5 h-5" />
+                                  <Settings className="w-4 h-4" />
                                 </button>
                                 <button 
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    handleArchiveCohort(cohort.id);
+                                    setArchivingClass(cohort);
                                   }}
-                                  className="p-3 text-slate-600 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-all z-10 relative"
+                                  className="p-2 text-slate-500 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition-all z-10 relative"
                                   title="Archive Class"
                                 >
-                                  <Archive className="w-5 h-5" />
+                                  <Archive className="w-4 h-4" />
                                 </button>
                                 <button 
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    handleDeleteCohort(cohort.id);
+                                    setDeletingClass(cohort);
                                   }}
-                                  className="p-3 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-xl transition-all z-10 relative"
+                                  className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all z-10 relative"
                                   title="Delete Class"
                                 >
-                                  <Trash2 className="w-5 h-5" />
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
 
-                            <h3 className="text-lg font-black text-white mb-2 tracking-tight uppercase leading-tight">{cohort.name}</h3>
-                            <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mb-8">
+                            <h3 className="text-lg font-black text-white mb-1 tracking-tight uppercase leading-tight">{cohort.name}</h3>
+                            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-4">
                               Created {new Date(cohort.created_at).toLocaleDateString()}
                             </p>
                             
-                            <div className="mb-10 space-y-3">
-                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Access Credentials</label>
-                              <div className="bg-slate-800 p-3 rounded-xl flex items-center justify-between border border-slate-700 shadow-inner group-hover:border-slate-600 transition-all">
-                                <code className={`text-2xl font-mono font-black tracking-[0.2em] ${colorStyles.accent} pl-2`}>
+                            <div className="mb-5 space-y-2">
+                              <label className="block text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">Access Credentials</label>
+                              <div className="bg-slate-800 p-2.5 rounded-lg flex items-center justify-between border border-slate-700 shadow-inner group-hover:border-slate-600 transition-all">
+                                <code className={`text-lg font-mono font-black tracking-[0.2em] ${colorStyles.accent} pl-2`}>
                                   {cohort.join_code}
                                 </code>
                                 <button 
@@ -2503,27 +2913,27 @@ function Dashboard() {
                                     navigator.clipboard.writeText(cohort.join_code);
                                     showToast('Code copied to clipboard!');
                                   }}
-                                  className="p-2 text-slate-500 hover:text-white hover:bg-slate-700 rounded-lg transition-all"
+                                  className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-700 rounded-md transition-all"
                                   title="Copy Code"
                                 >
-                                  <Copy className="w-5 h-5" />
+                                  <Copy className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
 
-                            <div className="mt-auto pt-8 border-t border-slate-800/50 flex items-center justify-between">
-                              <div className="space-y-1">
-                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Enrollment</p>
-                                <p className="text-3xl font-black text-white tracking-tight">{cohort.student_count || 0}</p>
+                            <div className="mt-auto pt-4 border-t border-slate-800/50 flex items-center justify-between">
+                              <div className="space-y-0.5">
+                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Enrollment</p>
+                                <p className="text-2xl font-black text-white tracking-tight">{cohort.student_count || 0}</p>
                               </div>
                               <button 
                                 onClick={() => {
                                   setSelectedClassDetails(cohort);
                                   fetchClassRoster(cohort.id);
                                 }}
-                                className={`px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-sm transition-all transform hover:scale-105 active:scale-95 text-white ${colorStyles.btn}`}
+                                className={`px-5 py-2.5 rounded-xl font-black uppercase tracking-widest text-xs transition-all transform hover:scale-105 active:scale-95 text-white ${colorStyles.btn}`}
                               >
-                                View Roster
+                                Roster
                               </button>
                             </div>
                           </div>
@@ -2670,23 +3080,23 @@ function Dashboard() {
               </div>
             </div>
             
-            <div className="overflow-hidden rounded-xl border border-slate-700">
-              <table className="w-full text-left border-collapse">
+            <div className="overflow-x-auto rounded-xl border border-slate-700">
+              <table className="w-full text-left border-collapse table-fixed">
                 <thead>
                   <tr className="bg-slate-900/50 text-slate-500 text-[10px] uppercase tracking-widest font-bold">
-                    <th className="px-6 py-4">Term</th>
-                    <th className="px-6 py-4">Type</th>
-                    <th className="px-6 py-4">Classes</th>
-                    <th className="px-6 py-4">Novel Context</th>
-                    <th className="px-6 py-4">Reviews</th>
-                    <th className="px-6 py-4">Mastery %</th>
-                    <th className="px-6 py-4">Actions</th>
+                    <th className="px-2 py-3 md:px-4 w-[18%]">Term</th>
+                    <th className="px-2 py-3 md:px-4 w-[12%]">Type</th>
+                    <th className="px-2 py-3 md:px-4 w-[16%]">Classes</th>
+                    <th className="px-2 py-3 md:px-4 w-[18%]">Novel Context</th>
+                    <th className="px-2 py-3 md:px-4 w-[8%] text-center">Reviews</th>
+                    <th className="px-2 py-3 md:px-4 w-[10%] text-center">Mastery</th>
+                    <th className="px-2 py-3 md:px-4 w-[18%] text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700">
                   {recentItems.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-slate-500 italic">No content has been deployed yet.</td>
+                      <td colSpan={7} className="px-4 py-12 text-center text-slate-500 italic">No content has been deployed yet.</td>
                     </tr>
                   ) : (
                     recentItems
@@ -2698,34 +3108,35 @@ function Dashboard() {
                       })
                       .map((item) => (
                       <tr key={item.id} className={`hover:bg-slate-700/30 transition-colors group ${item.is_active === false ? 'opacity-50 grayscale' : ''}`}>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-bold">{item.term}</span>
+                        <td className="px-2 py-3 md:px-4 truncate">
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="text-white font-bold truncate" title={item.term}>{item.term}</span>
                             {item.is_active === false && (
-                              <span className="text-[9px] px-2 py-0.5 rounded font-bold uppercase bg-slate-500/20 text-slate-400">
+                              <span className="hidden md:inline-block text-[9px] px-2 py-0.5 rounded font-bold uppercase bg-slate-500/20 text-slate-400">
                                 INACTIVE
                               </span>
                             )}
                           </div>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-2 py-3 md:px-4 truncate">
                           <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase ${item.item_type === 'vocab' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
                             {item.item_type}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-sm text-slate-400">
+                        <td className="px-2 py-3 md:px-4 text-xs md:text-sm text-slate-400 truncate" title={(item.target_classes || []).join(', ') || item.cohort_id || '—'}>
                           {(item.target_classes || []).join(', ') || item.cohort_id || '—'}
                         </td>
-                        <td className="px-6 py-4 text-sm text-slate-400 italic">{item.novel_node || '—'}</td>
-                        <td className="px-6 py-4 text-sm text-slate-400">{item.totalReviews || 0}</td>
-                        <td className="px-6 py-4 text-sm text-slate-400">{item.masteryPercentage || 0}%</td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <td className="px-2 py-3 md:px-4 text-xs md:text-sm text-slate-400 italic truncate" title={item.novel_node || '—'}>
+                          {item.novel_node || '—'}
+                        </td>
+                        <td className="px-2 py-3 md:px-4 text-xs md:text-sm text-slate-400 text-center">{item.totalReviews || 0}</td>
+                        <td className="px-2 py-3 md:px-4 text-xs md:text-sm text-slate-400 text-center">{item.masteryPercentage || 0}%</td>
+                        <td className="px-2 py-3 md:px-4">
+                          <div className="flex items-center justify-end gap-1 md:gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
                             <button 
                               onClick={() => {
                                 setEditingItem(item);
-                                setEditTerm(item.term);
-                                setEditDefinition(item.definition);
+                                setEditForm(JSON.parse(JSON.stringify(item)));
                               }}
                               className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"
                               title="Edit"
@@ -2733,14 +3144,19 @@ function Dashboard() {
                               <Edit3 className="w-4 h-4" />
                             </button>
                             <button 
+                              onClick={() => setDeletingContent(item)}
+                              className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-red-400 transition-colors"
+                              title="Permanently Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <button 
                               onClick={() => handleToggleStatus(item.id, item.is_active !== false)}
-                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${item.is_active !== false ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                              className={`relative inline-flex h-4 w-7 md:h-5 md:w-9 items-center rounded-full transition-colors focus:outline-none ${item.is_active !== false ? 'bg-emerald-500' : 'bg-slate-600'}`}
                               title={item.is_active !== false ? "Retire Content" : "Activate Content"}
                             >
                               <span className="sr-only">Toggle status</span>
-                              <span
-                                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${item.is_active !== false ? 'translate-x-5' : 'translate-x-1'}`}
-                              />
+                              <span className={`inline-block h-2 w-2 md:h-3 md:w-3 transform rounded-full bg-white transition-transform ${item.is_active !== false ? 'translate-x-4 md:translate-x-5' : 'translate-x-1'}`} />
                             </button>
                           </div>
                         </td>
@@ -2753,48 +3169,198 @@ function Dashboard() {
           </div>
         )}
 
-        {/* Edit Modal */}
+        {/* Full-Power Edit Modal */}
         {editingItem && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-2xl max-w-md w-full mx-4 relative animate-in zoom-in-95 duration-200">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl p-8 shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto relative animate-in zoom-in-95 duration-200">
               <button 
                 onClick={() => setEditingItem(null)}
-                className="absolute top-4 right-4 text-slate-500 hover:text-white"
+                className="absolute top-6 right-6 text-slate-500 hover:text-white bg-slate-800 p-2 rounded-full transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
               
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                <Edit3 className="w-5 h-5 text-indigo-400" />
-                Edit Content
+              <h2 className="text-2xl font-black text-white mb-6 flex items-center gap-3 border-b border-slate-800 pb-4">
+                <Edit3 className="w-6 h-6 text-indigo-400" />
+                Edit {editForm.item_type === 'grammar' ? 'Grammar Rule' : 'Vocabulary'}
               </h2>
 
-              <div className="space-y-4">
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Term / Concept</label>
+                    <input 
+                      type="text" 
+                      value={editForm.term || ''}
+                      onChange={(e) => setEditForm({...editForm, term: e.target.value})}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Target Classes</label>
+                    <div className="flex flex-wrap gap-2">
+                      {cohorts.map(c => (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            const currentClasses = editForm.target_classes || [];
+                            const newClasses = currentClasses.includes(c.name) 
+                              ? currentClasses.filter((name: string) => name !== c.name)
+                              : [...currentClasses, c.name];
+                            setEditForm({...editForm, target_classes: newClasses});
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all border ${
+                            (editForm.target_classes || []).includes(c.name) 
+                              ? 'bg-indigo-600 border-indigo-500 text-white shadow-md' 
+                              : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Term</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Novel / Context</label>
                   <input 
                     type="text" 
-                    value={editTerm}
-                    onChange={(e) => setEditTerm(e.target.value)}
+                    value={editForm.novel_node || ''}
+                    onChange={(e) => setEditForm({...editForm, novel_node: e.target.value})}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Definition</label>
-                  <textarea 
-                    value={editDefinition}
-                    onChange={(e) => setEditDefinition(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none h-32 resize-none"
-                  />
-                </div>
+
+                {editForm.item_type === 'vocab' && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                      <div className="md:col-span-3">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Definition</label>
+                        <textarea 
+                          value={editForm.definition || ''}
+                          onChange={(e) => setEditForm({...editForm, definition: e.target.value})}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none h-24 resize-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">POS</label>
+                        <input 
+                          type="text" 
+                          value={editForm.part_of_speech || ''}
+                          onChange={(e) => setEditForm({...editForm, part_of_speech: e.target.value})}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {editForm.question_bank && Array.isArray(editForm.question_bank) && editForm.question_bank.length > 0 && (
+                      <div className="space-y-4 pt-4 border-t border-slate-800">
+                        <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest">Question Bank Variations</h3>
+                        {editForm.question_bank.map((q: any, idx: number) => (
+                          <div key={idx} className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3">
+                            <label className="block text-[10px] font-bold text-slate-500 uppercase">
+                              {q.type.replace('_', ' ')} Prompt
+                            </label>
+                            <textarea 
+                              value={q.prompt_text || ''}
+                              onChange={(e) => {
+                                const newQb = [...editForm.question_bank];
+                                newQb[idx] = { ...newQb[idx], prompt_text: e.target.value };
+                                setEditForm({...editForm, question_bank: newQb});
+                              }}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none resize-none h-24"
+                            />
+                            <label className="block text-[10px] font-bold text-emerald-500 uppercase pt-2">
+                              Target Answer
+                            </label>
+                            <textarea 
+                              value={q.answer_text || ''}
+                              onChange={(e) => {
+                                const newQb = [...editForm.question_bank];
+                                newQb[idx] = { ...newQb[idx], answer_text: e.target.value };
+                                setEditForm({...editForm, question_bank: newQb});
+                              }}
+                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none h-16"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {editForm.item_type === 'grammar' && (
+                  <div className="space-y-4 pt-2">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Incorrect Sentence</label>
+                      <textarea 
+                        value={editForm.incorrect_sentence || ''}
+                        onChange={(e) => setEditForm({...editForm, incorrect_sentence: e.target.value})}
+                        className="w-full bg-red-950/30 border border-red-900/50 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-red-500 outline-none h-24 resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Error Target (Hint)</label>
+                      <input 
+                        type="text" 
+                        value={editForm.error_target || ''}
+                        onChange={(e) => setEditForm({...editForm, error_target: e.target.value})}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-emerald-500 uppercase tracking-widest mb-2">Corrected Sentence</label>
+                      <textarea 
+                        value={editForm.corrected_sentence || ''}
+                        onChange={(e) => setEditForm({...editForm, corrected_sentence: e.target.value})}
+                        className="w-full bg-emerald-950/30 border border-emerald-900/50 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none h-24 resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
                 
+                <div className="pt-6 border-t border-slate-800">
+                  <button 
+                    onClick={handleSaveEdit}
+                    disabled={!editForm.term}
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase tracking-widest py-4 rounded-xl shadow-[0_0_20px_rgba(79,70,229,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-50 transform hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <Save className="w-6 h-6" />
+                    Save All Changes
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Content Confirmation Modal */}
+        {deletingContent && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in duration-200 p-4">
+            <div className="bg-slate-900 border border-red-900/50 rounded-2xl p-8 shadow-2xl max-w-md w-full relative animate-in zoom-in-95 duration-200">
+              <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Trash2 className="w-8 h-8 text-red-500" />
+              </div>
+              
+              <h2 className="text-2xl font-black text-white text-center mb-2">Delete Content?</h2>
+              <p className="text-slate-400 text-center mb-8">
+                Are you sure you want to delete <span className="text-white font-bold">"{deletingContent.term}"</span>? 
+                This action is permanent and will remove all associated progress data.
+              </p>
+
+              <div className="flex gap-4">
                 <button 
-                  onClick={handleSaveEdit}
-                  disabled={!editTerm || !editDefinition}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={() => setDeletingContent(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-all"
                 >
-                  <Save className="w-5 h-5" />
-                  Save Changes
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleDeleteContent(deletingContent.id)}
+                  className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl shadow-[0_0_20px_rgba(220,38,38,0.3)] transition-all"
+                >
+                  Delete Forever
                 </button>
               </div>
             </div>
@@ -2891,96 +3457,151 @@ function Dashboard() {
         {viewMode === 'analytics' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                 <div>
-                  <h2 className="text-xl font-bold text-white">Student Roster Analytics</h2>
-                  <p className="text-sm text-slate-400">Real-time mastery tracking and decay alerts.</p>
+                  <h2 className="text-xl font-bold text-white">Global Student Directory</h2>
+                  <p className="text-sm text-slate-400">Manage all students and monitor mastery across the school.</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      placeholder="Search student..."
+                      value={rosterSearch}
+                      onChange={(e) => setRosterSearch(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none w-full sm:w-48"
+                    />
+                  </div>
+                  <select
+                    value={rosterFilter}
+                    onChange={(e) => setRosterFilter(e.target.value)}
+                    className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none w-full sm:w-auto"
+                  >
+                    <option value="">All Classes</option>
+                    <option value="Unassigned">Unassigned</option>
+                    {cohorts.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
                   <button 
                     onClick={exportToCSV}
                     disabled={roster.length === 0}
                     className="flex items-center gap-2 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Export to CSV"
                   >
                     <Download className="w-4 h-4" />
-                    Download CSV
                   </button>
                   <button 
                     onClick={fetchRoster}
                     disabled={isLoadingRoster}
-                    className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-indigo-400"
+                    className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-indigo-400 border border-slate-700"
+                    title="Refresh Data"
                   >
                     <History className={`w-5 h-5 ${isLoadingRoster ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-                <table className="w-full text-left border-collapse">
+              <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[900px]">
                   <thead>
-                    <tr className="bg-slate-800/50 text-[10px] uppercase tracking-widest font-bold text-slate-500 border-b border-slate-800">
-                      <th className="px-6 py-4">Student Name</th>
-                      <th className="px-6 py-4">Rank</th>
-                      <th className="px-6 py-4">Total XP</th>
-                      <th className="px-6 py-4">Mastered Words</th>
-                      <th className="px-6 py-4">Decaying Words</th>
+                    <tr className="bg-slate-800/50 text-[10px] uppercase tracking-widest font-bold text-slate-500 border-b border-slate-800 whitespace-nowrap">
+                      <th className="px-6 py-4 w-[20%]">Student Name</th>
+                      <th className="px-6 py-4 w-[15%]">Class</th>
+                      <th className="px-6 py-4 w-[15%]">Status</th>
+                      <th className="px-6 py-4 w-[20%]">Mastery & Decay</th>
+                      <th className="px-6 py-4 w-[15%]">Total XP / Rank</th>
+                      <th className="px-6 py-4 w-[15%] text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {isLoadingRoster ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center">
+                        <td colSpan={6} className="px-6 py-12 text-center">
                           <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-2" />
-                          <p className="text-sm text-slate-500">Calculating mastery metrics...</p>
+                          <p className="text-sm text-slate-500">Loading global directory...</p>
                         </td>
                       </tr>
                     ) : roster.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center">
+                        <td colSpan={6} className="px-6 py-12 text-center">
                           <p className="text-sm text-slate-500">No student data found.</p>
                         </td>
                       </tr>
                     ) : (
-                      roster.map((student, idx) => (
-                        <tr key={idx} className="hover:bg-slate-800/30 transition-colors group">
-                          <td className="px-6 py-4">
-                            <div className="font-bold text-slate-200">{student.name}</div>
-                            <div className="text-[10px] text-slate-500">{student.email}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tighter ${
-                              student.rank === 'Gold' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
-                              student.rank === 'Silver' ? 'bg-slate-400/10 text-slate-400 border border-slate-400/20' :
-                              'bg-orange-700/10 text-orange-600 border border-orange-700/20'
-                            }`}>
-                              {student.rank}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 font-mono text-sm text-indigo-400">
-                            {student.xp.toLocaleString()}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <span className="text-lg font-bold text-emerald-400">{student.masteredItems}</span>
-                              <div className="w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
-                                <div 
-                                  className="h-full bg-emerald-500" 
-                                  style={{ width: `${Math.min(100, (student.masteredItems / 50) * 100)}%` }}
-                                />
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`text-lg transition-all duration-500 ${
-                              student.decayingMastery > 0 
-                                ? 'text-red-400 font-bold drop-shadow-[0_0_8px_rgba(248,113,113,0.5)]' 
-                                : 'text-slate-600'
-                            }`}>
-                              {student.decayingMastery}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
+                      roster
+                        .filter(student => {
+                          if (rosterSearch && !student.name.toLowerCase().includes(rosterSearch.toLowerCase()) && !student.email.toLowerCase().includes(rosterSearch.toLowerCase())) return false;
+                          if (rosterFilter && student.cohort_name !== rosterFilter) return false;
+                          return true;
+                        })
+                        .map((student, idx) => {
+                          const lastActiveDate = student.lastActive ? new Date(student.lastActive) : null;
+                          const daysSinceActive = lastActiveDate ? Math.floor((new Date().getTime() - lastActiveDate.getTime()) / (1000 * 3600 * 24)) : -1;
+                          const isInactive = daysSinceActive > 7 || daysSinceActive === -1;
+
+                          return (
+                            <tr key={student.id || idx} className="hover:bg-slate-800/30 transition-colors group">
+                              <td className="px-6 py-4">
+                                <div className="font-bold text-slate-200 truncate">{student.name}</div>
+                                <div className="text-[10px] text-slate-500 truncate">{student.email}</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`text-xs font-bold px-2 py-1 rounded-md border ${student.cohort_name === 'Unassigned' ? 'bg-slate-800 text-slate-400 border-slate-700' : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'}`}>
+                                  {student.cohort_name}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`text-xs font-bold ${isInactive ? 'text-red-400' : 'text-emerald-400'}`}>
+                                  {daysSinceActive === -1 ? 'Never' : daysSinceActive === 0 ? 'Active Today' : `${daysSinceActive} days ago`}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-sm font-bold text-emerald-400" title="Mastered Words">{student.masteredItems}</span>
+                                  <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (student.masteredItems / 50) * 100)}%` }} />
+                                  </div>
+                                  {student.decayingMastery > 0 && (
+                                    <span className="text-xs font-bold text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20" title="Words decaying from mastery">
+                                      {student.decayingMastery} At Risk
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-sm text-indigo-400 font-bold">{student.xp.toLocaleString()} XP</span>
+                                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${
+                                    student.rank === 'Gold' ? 'bg-yellow-500/20 text-yellow-500' :
+                                    student.rank === 'Silver' ? 'bg-slate-400/20 text-slate-300' :
+                                    student.rank === 'Platinum' ? 'bg-cyan-500/20 text-cyan-400' :
+                                    'bg-orange-700/20 text-orange-500'
+                                  }`}>
+                                    {student.rank}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button 
+                                    onClick={() => setMovingStudent(student)}
+                                    className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-indigo-400 transition-colors"
+                                    title="Move Class"
+                                  >
+                                    <ArrowRightLeft className="w-4 h-4" />
+                                  </button>
+                                  <button 
+                                    onClick={() => setRemovingStudent(student)}
+                                    className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-red-400 transition-colors"
+                                    title="Unenroll Student"
+                                  >
+                                    <UserMinus className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                     )}
                   </tbody>
                 </table>
@@ -2988,26 +3609,91 @@ function Dashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">Class Mastery Avg</h4>
-                <p className="text-3xl font-bold text-white">
-                  {roster.length > 0 
-                    ? (roster.reduce((acc, s) => acc + s.masteredItems, 0) / roster.length).toFixed(1)
-                    : '0.0'
-                  }
-                </p>
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-md">
+                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">Total Students Enrolled</h4>
+                <p className="text-3xl font-black text-white">{roster.length}</p>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">At-Risk Students</h4>
-                <p className="text-3xl font-bold text-red-400">
-                  {roster.filter(s => s.decayingMastery > 0).length}
-                </p>
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-md">
+                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">School At-Risk (Decay)</h4>
+                <p className="text-3xl font-black text-red-400">{roster.filter(s => s.decayingMastery > 0).length}</p>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
-                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">Total Class XP</h4>
-                <p className="text-3xl font-bold text-indigo-400">
-                  {roster.reduce((acc, s) => acc + s.xp, 0).toLocaleString()}
-                </p>
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-md">
+                <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">Total School XP Generated</h4>
+                <p className="text-3xl font-black text-indigo-400">{roster.reduce((acc, s) => acc + s.xp, 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Archive Confirmation Modal */}
+        {archivingClass && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-10 max-w-md w-full shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300 relative">
+              <button 
+                onClick={() => setArchivingClass(null)}
+                className="absolute top-6 right-6 text-slate-500 hover:text-white transition-colors p-2 hover:bg-slate-800 rounded-full"
+              >
+                <X className="w-6 h-6" />
+              </button>
+              
+              <div className="mb-6 text-center">
+                <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
+                  <Archive className="w-8 h-8 text-amber-500" />
+                </div>
+                <h3 className="text-2xl font-black text-white tracking-tight uppercase mb-2">Archive Class</h3>
+                <p className="text-slate-400">Are you sure you want to archive <span className="text-white font-bold">{archivingClass.name}</span>?</p>
+              </div>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setArchivingClass(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-4 rounded-xl transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleArchiveCohort(archivingClass.id)}
+                  className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 rounded-xl shadow-lg transition-all"
+                >
+                  Archive
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Confirmation Modal */}
+        {deletingClass && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-10 max-w-md w-full shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300 relative">
+              <button 
+                onClick={() => setDeletingClass(null)}
+                className="absolute top-6 right-6 text-slate-500 hover:text-white transition-colors p-2 hover:bg-slate-800 rounded-full"
+              >
+                <X className="w-6 h-6" />
+              </button>
+              
+              <div className="mb-6 text-center">
+                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/20">
+                  <Trash2 className="w-8 h-8 text-red-500" />
+                </div>
+                <h3 className="text-2xl font-black text-white tracking-tight uppercase mb-2">Delete Class</h3>
+                <p className="text-slate-400">Are you sure you want to delete <span className="text-white font-bold">{deletingClass.name}</span>? This action cannot be undone.</p>
+              </div>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setDeletingClass(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-4 rounded-xl transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleDeleteCohort(deletingClass.id)}
+                  className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-4 rounded-xl shadow-lg transition-all"
+                >
+                  Delete Forever
+                </button>
               </div>
             </div>
           </div>
@@ -3119,6 +3805,156 @@ function Dashboard() {
   );
 }
 
+function Leaderboard() {
+  const [activeTab, setActiveTab] = useState<'players' | 'teams'>('players');
+  const [data, setData] = useState<{ topPlayers: any[], teamStandings: any[] } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchLeaderboard = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('/api/leaderboard', {
+          headers: { 'x-auth-token': token || '' }
+        });
+        if (response.ok) {
+          const result = await response.json();
+          setData(result);
+        }
+      } catch (error) {
+        console.error('Error fetching leaderboard:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchLeaderboard();
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white p-6 md:p-12">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-12">
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4 bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+            Global Leaderboard
+          </h1>
+          <p className="text-slate-400">Compete for glory and honor.</p>
+        </div>
+
+        {/* Toggle */}
+        <div className="flex justify-center mb-12">
+          <div className="bg-slate-800/50 p-1 rounded-xl flex gap-2 border border-slate-700">
+            <button
+              onClick={() => setActiveTab('players')}
+              className={`px-6 py-3 rounded-lg font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'players' 
+                  ? 'bg-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Trophy className="w-5 h-5" />
+              Top Players
+            </button>
+            <button
+              onClick={() => setActiveTab('teams')}
+              className={`px-6 py-3 rounded-lg font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'teams' 
+                  ? 'bg-emerald-600 text-white shadow-lg' 
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <ShieldAlert className="w-5 h-5" />
+              Team Standings
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          {activeTab === 'players' ? (
+            data?.topPlayers.map((player, idx) => (
+              <div 
+                key={player.id}
+                className={`relative flex items-center gap-6 p-6 rounded-2xl border-2 transition-all hover:scale-[1.02] ${
+                  idx === 0 ? 'bg-yellow-500/10 border-yellow-500/30 shadow-[0_0_30px_rgba(234,179,8,0.1)]' :
+                  idx === 1 ? 'bg-slate-400/10 border-slate-400/30' :
+                  idx === 2 ? 'bg-amber-700/10 border-amber-700/30' :
+                  'bg-slate-800/30 border-slate-800 hover:bg-slate-800/50'
+                }`}
+              >
+                <div className={`text-3xl font-black w-12 text-center ${
+                  idx === 0 ? 'text-yellow-400' :
+                  idx === 1 ? 'text-slate-300' :
+                  idx === 2 ? 'text-amber-600' :
+                  'text-slate-600'
+                }`}>
+                  #{idx + 1}
+                </div>
+                
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-1">
+                    <h3 className={`text-xl font-bold ${
+                      idx === 0 ? 'text-yellow-100' : 'text-white'
+                    }`}>
+                      {player.name}
+                    </h3>
+                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
+                      player.rank === 'Platinum' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' :
+                      player.rank === 'Gold' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                      player.rank === 'Silver' ? 'bg-slate-400/20 text-slate-300 border border-slate-400/30' :
+                      'bg-amber-700/20 text-amber-600 border border-amber-700/30'
+                    }`}>
+                      {player.rank}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-400">{player.cohort_name}</p>
+                </div>
+
+                <div className="text-right">
+                  <div className="text-2xl font-mono font-bold text-indigo-400">
+                    {player.xp.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500">Total XP</div>
+                </div>
+              </div>
+            ))
+          ) : (
+            data?.teamStandings.map((team, idx) => (
+              <div 
+                key={idx}
+                className="flex items-center gap-6 p-6 bg-slate-800/30 border-2 border-slate-800 rounded-2xl hover:bg-slate-800/50 transition-all"
+              >
+                <div className="text-3xl font-black w-12 text-center text-slate-600">
+                  #{idx + 1}
+                </div>
+                
+                <div className="flex-1">
+                  <h3 className="text-xl font-bold text-white mb-1">{team.name}</h3>
+                  <p className="text-sm text-slate-400">{team.studentCount} Active Students</p>
+                </div>
+
+                <div className="text-right">
+                  <div className="text-2xl font-mono font-bold text-emerald-400">
+                    {team.averageXp.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500">Avg XP</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Router Setup ---
 
 function ProtectedRoute({ children, allowedRole }: { children: React.ReactNode, allowedRole?: string }) {
@@ -3203,6 +4039,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Arena />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/leaderboard" 
+            element={
+              <ProtectedRoute>
+                <Leaderboard />
               </ProtectedRoute>
             } 
           />

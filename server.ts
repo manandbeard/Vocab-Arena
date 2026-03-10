@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -150,7 +150,15 @@ async function startServer() {
           xp: 0,
           rank: 'Bronze',
           createdAt: new Date().toISOString(),
-          lastActive: new Date().toISOString()
+          lastActive: new Date().toISOString(),
+          inventory: { insight_scrolls: 1 }, // Start with 1 free scroll
+          relics: [], // Array of strings (e.g., 'First Blood', 'Streak Master')
+          quests: {
+            bosses_slain: 0,
+            words_mastered: 0,
+            current_streak: 0,
+            quests_claimed: [] // Array of quest IDs they've completed this week
+          }
         });
       } else {
         await userRef.update({
@@ -162,6 +170,67 @@ async function startServer() {
       res.json({ role: userData?.role });
     } catch (error) {
       console.error('Error syncing user:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // Step 1: The Leaderboard API (Backend)
+  app.get("/api/leaderboard", verifyFirebaseToken, async (req, res) => {
+    try {
+      // 1. Fetch all students
+      const studentsSnapshot = await db.collection('users').where('role', '==', 'student').get();
+      const students = studentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // 2. Fetch all active classes
+      const classesSnapshot = await db.collection('classes').where('is_archived', '==', false).get();
+      const classesMap = new Map();
+      classesSnapshot.docs.forEach(doc => {
+        classesMap.set(doc.id, doc.data());
+      });
+
+      // 3. Calculate Top Players
+      const topPlayers = students
+        .sort((a: any, b: any) => (b.xp || 0) - (a.xp || 0))
+        .slice(0, 10)
+        .map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          xp: s.xp || 0,
+          rank: s.rank || 'Bronze',
+          cohort_name: classesMap.get(s.cohort_id)?.name || 'Unknown Class'
+        }));
+
+      // 4. Calculate Team Standings
+      const teamStats = new Map(); // cohortId -> { totalXp, studentCount, name }
+
+      students.forEach((s: any) => {
+        if (s.cohort_id && classesMap.has(s.cohort_id)) {
+          const cohort = classesMap.get(s.cohort_id);
+          const current = teamStats.get(s.cohort_id) || { 
+            totalXp: 0, 
+            studentCount: 0, 
+            name: cohort.name,
+            theme_color: cohort.theme_color
+          };
+          
+          current.totalXp += (s.xp || 0);
+          current.studentCount += 1;
+          teamStats.set(s.cohort_id, current);
+        }
+      });
+
+      const teamStandings = Array.from(teamStats.values())
+        .map((team: any) => ({
+          name: team.name,
+          studentCount: team.studentCount,
+          averageXp: Math.round(team.totalXp / team.studentCount),
+          theme_color: team.theme_color
+        }))
+        .sort((a, b) => b.averageXp - a.averageXp);
+
+      res.json({ topPlayers, teamStandings });
+    } catch (error) {
+      console.error('Error fetching leaderboard:', error);
       res.status(500).json({ error: 'Internal Server Error' });
     }
   });
@@ -208,6 +277,44 @@ async function startServer() {
     } catch (error) {
       console.error('Error creating class:', error);
       res.status(500).json({ error: 'Failed to create class' });
+    }
+  });
+
+  app.patch('/api/admin/classes/:id', verifyFirebaseToken, verifyTeacher, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, theme_color } = req.body;
+      
+      const classRef = db.collection('classes').doc(id);
+      const doc = await classRef.get();
+      if (!doc.exists) return res.status(404).json({error: 'Class not found'});
+      
+      const oldName = doc.data()?.name;
+      await classRef.update({ name, theme_color });
+
+      // Cascade the name change so words and students don't detach
+      if (name && oldName && name !== oldName) {
+         const batch = db.batch();
+         
+         const itemsSnapshot = await db.collection('learning_items').where('target_classes', 'array-contains', oldName).get();
+         itemsSnapshot.docs.forEach(itemDoc => {
+           const data = itemDoc.data();
+           const newTargetClasses = data.target_classes.map((c: string) => c === oldName ? name : c);
+           batch.update(itemDoc.ref, { target_classes: newTargetClasses });
+         });
+         
+         const usersSnapshot = await db.collection('users').where('cohort_id', '==', id).get();
+         usersSnapshot.docs.forEach(userDoc => {
+           batch.update(userDoc.ref, { cohort_name: name });
+         });
+
+         await batch.commit();
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating class:', error);
+      res.status(500).json({error: 'Failed to update class'});
     }
   });
 
@@ -301,35 +408,37 @@ async function startServer() {
         const studentData = studentDoc.data();
         const studentId = studentDoc.id;
 
-        // Query user_progress for this student
         const progressSnapshot = await db.collection('users').doc(studentId).collection('user_progress').get();
-        
         let masteredItems = 0;
         let decayingMastery = 0;
 
         progressSnapshot.forEach(doc => {
           const data = doc.data();
-          const interval = data.interval || 0;
-          const easeFactor = data.easeFactor || 2.5; 
-
-          if (interval >= 21) {
+          if ((data.interval || 0) >= 21) {
             masteredItems++;
-            if (easeFactor < 2.0) {
-              decayingMastery++;
-            }
+            if ((data.easeFactor || 2.5) < 2.0) decayingMastery++;
           }
         });
 
+        let cohortName = studentData.cohort_name || 'Unassigned';
+        if (studentData.cohort_id && !studentData.cohort_name) {
+           const cohortDoc = await db.collection('classes').doc(studentData.cohort_id).get();
+           if (cohortDoc.exists) cohortName = cohortDoc.data()?.name || 'Unassigned';
+        }
+
         roster.push({
+          id: studentId,
           name: studentData.name || 'Unknown',
           email: studentData.email,
           xp: studentData.xp || 0,
           rank: studentData.rank || 'Bronze',
+          cohort_id: studentData.cohort_id || null,
+          cohort_name: cohortName,
+          lastActive: studentData.lastActive || studentData.createdAt || null,
           masteredItems,
           decayingMastery
         });
       }
-
       res.json(roster);
     } catch (error) {
       console.error('Error fetching roster analytics:', error);
@@ -337,9 +446,39 @@ async function startServer() {
     }
   });
 
+  // Step 2: Claim Bounty API
+  app.post("/api/study/claim-bounty", verifyFirebaseToken, async (req, res) => {
+    const { bountyId, rewardType, rewardAmount } = req.body;
+    const { uid } = req.user;
+    try {
+      const userRef = db.collection('users').doc(uid);
+      const userDoc = await userRef.get();
+      const data = userDoc.data() || {};
+      
+      const questsClaimed = data.quests?.quests_claimed || [];
+      if (questsClaimed.includes(bountyId)) return res.status(400).json({ error: "Already claimed" });
+      
+      const updates: any = { 
+        'quests.quests_claimed': [...questsClaimed, bountyId],
+        xp: (data.xp || 0) + (rewardType === 'xp' ? rewardAmount : 0)
+      };
+
+      if (rewardType === 'scroll') {
+        updates['inventory.insight_scrolls'] = (data.inventory?.insight_scrolls || 0) + rewardAmount;
+      } else if (rewardType === 'relic') {
+        updates.relics = [...(data.relics || []), rewardAmount]; // rewardAmount is the relic name
+      }
+
+      await userRef.update(updates);
+      res.json({ success: true, updates });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to claim" });
+    }
+  });
+
   // Step 1: The Rank-Up Logic (Backend)
   app.post("/api/study/log-review", verifyFirebaseToken, async (req, res) => {
-    const { itemId, score, responseTimeMs, sm2Result } = req.body;
+    const { itemId, score, responseTimeMs, sm2Result, isBoss, xpAwarded } = req.body;
     const { uid } = req.user;
 
     if (!itemId || score === undefined || !responseTimeMs) {
@@ -352,12 +491,30 @@ async function startServer() {
 
       // Anti-Cheat Logic
       if (!isRushed) {
-        if (score >= 3) xpGained = 50; // Standard XP for correct answer
-        else xpGained = 10; // Participation XP
+        if (xpAwarded !== undefined) {
+          xpGained = xpAwarded;
+        } else {
+          if (score >= 3) xpGained = 50; // Standard XP for correct answer
+          else xpGained = 10; // Participation XP
+        }
       }
 
       let leveledUp = false;
       let newRank = '';
+
+      // Fetch old progress to check mastery
+      let progressData: any = null;
+      if (sm2Result) {
+        const progressRef = db.collection('users').doc(uid).collection('user_progress').doc(itemId);
+        const progressDoc = await progressRef.get();
+        if (progressDoc.exists) {
+          progressData = progressDoc.data();
+        }
+      }
+
+      // 1. Determine if quest criteria were met
+      const isBossSlay = isBoss && score >= 3;
+      const isNewMastery = sm2Result?.interval >= 21 && (progressData?.interval || 0) < 21;
 
       // Update User XP and Check Rank
       const userRef = db.collection('users').doc(uid);
@@ -378,7 +535,13 @@ async function startServer() {
             email: req.user.email,
             name: req.user.name || 'Student',
             role: 'student',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            quests: {
+              bosses_slain: 0,
+              words_mastered: 0,
+              current_streak: 0,
+              quests_claimed: []
+            }
           };
         }
         
@@ -399,13 +562,61 @@ async function startServer() {
           }
         }
 
-        const updates = { 
-          ...userData,
-          xp: updatedXp,
-          rank: leveledUp ? newRank : currentRank
+        // 2. Prepare the user document updates
+        const userUpdates: any = {
+          xp: FieldValue.increment(xpGained),
+          rank: leveledUp ? newRank : currentRank,
+          last_study_date: new Date().toISOString().split('T')[0],
+          lastActive: new Date().toISOString()
         };
 
-        t.set(userRef, updates, { merge: true });
+        // 3. Trigger Bounties if conditions are met
+        if (isBossSlay) {
+          userUpdates['quests.bosses_slain'] = FieldValue.increment(1);
+        }
+        if (isNewMastery) {
+          userUpdates['quests.words_mastered'] = FieldValue.increment(1);
+        }
+
+        // Streak Logic
+        const today = new Date().toISOString().split('T')[0];
+        const lastStudyDate = userData.last_study_date;
+        
+        if (lastStudyDate !== today) {
+          if (lastStudyDate) {
+            const lastDate = new Date(lastStudyDate);
+            const currentDate = new Date(today);
+            const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+            if (diffDays === 1) {
+              userUpdates['quests.current_streak'] = FieldValue.increment(1);
+            } else {
+              userUpdates['quests.current_streak'] = 1;
+            }
+          } else {
+            userUpdates['quests.current_streak'] = 1;
+          }
+        }
+
+        if (doc.exists) {
+          t.update(userRef, userUpdates);
+        } else {
+          // For new docs, we can't use dot notation in set, so we construct the nested object
+          const newQuests = {
+            bosses_slain: isBossSlay ? 1 : 0,
+            words_mastered: isNewMastery ? 1 : 0,
+            current_streak: 1,
+            quests_claimed: []
+          };
+          t.set(userRef, {
+            ...userData,
+            xp: xpGained,
+            rank: leveledUp ? newRank : currentRank,
+            last_study_date: today,
+            lastActive: new Date().toISOString(),
+            quests: newQuests
+          });
+        }
       });
 
       // Log Review
@@ -421,13 +632,33 @@ async function startServer() {
       // Update User Progress with provided SM-2 results
       if (sm2Result) {
         const progressRef = db.collection('users').doc(uid).collection('user_progress').doc(itemId);
+        
+        let consecutiveFailures = progressData?.consecutive_failures || 0;
+        let isNemesis = progressData?.is_nemesis || false;
+
+        const correct = score >= 3;
+
+        // Nemesis Logic
+        if (!correct) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            isNemesis = true;
+          }
+        } else {
+          consecutiveFailures = 0;
+          isNemesis = false; // They defeated it!
+        }
+
         await progressRef.set({
           item_id: itemId,
           last_reviewed: new Date().toISOString(),
           repetition_count: sm2Result.repetitions,
           easeFactor: sm2Result.easeFactor,
           interval: sm2Result.interval,
-          nextReviewDate: sm2Result.nextReviewDate
+          nextReviewDate: sm2Result.nextReviewDate,
+          consecutive_failures: consecutiveFailures,
+          is_nemesis: isNemesis,
+          lastReviewed: FieldValue.serverTimestamp()
         }, { merge: true });
       }
 
@@ -436,6 +667,33 @@ async function startServer() {
     } catch (error) {
       console.error('Error logging review:', error);
       res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  app.post('/api/dev/reset-progress', verifyFirebaseToken, async (req: any, res) => {
+    try {
+      const { uid } = req.user;
+      const progressRef = db.collection('users').doc(uid).collection('user_progress');
+      const snapshot = await progressRef.get();
+      
+      const batch = db.batch();
+      snapshot.docs.forEach(doc => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+
+      // Optionally reset quest counters and XP
+      await db.collection('users').doc(uid).update({
+        xp: 0,
+        'quests.bosses_slain': 0,
+        'quests.words_mastered': 0,
+        'quests.current_streak': 0
+      });
+
+      res.json({ success: true, message: 'Progress wiped.' });
+    } catch (error) {
+      console.error('Error wiping progress:', error);
+      res.status(500).json({ error: 'Failed to wipe progress' });
     }
   });
 
@@ -572,21 +830,27 @@ async function startServer() {
     try {
       // 0. Fetch user's cohort
       const userDoc = await db.collection('users').doc(uid).get();
-      const userCohortId = userDoc.data()?.cohort_id;
+      
+      let itemsQuery: any = db.collection('learning_items').where('is_active', '==', true);
 
-      if (!userCohortId) {
-        return res.json([]);
+      // If user has a class assigned, filter by the class NAME (not the ID)
+      if (userDoc.exists && userDoc.data()?.cohort_id) {
+        const cohortId = userDoc.data()?.cohort_id;
+        const cohortDoc = await db.collection('classes').doc(cohortId).get();
+        
+        if (cohortDoc.exists) {
+          const cohortName = cohortDoc.data()?.name;
+          itemsQuery = itemsQuery.where('target_classes', 'array-contains', cohortName);
+        }
       }
 
-      // 1. Fetch all active learning items for the cohort
-      const itemsSnapshot = await db.collection('learning_items')
-        .where('target_classes', 'array-contains', userCohortId)
-        .get();
+      // 1. Fetch learning items
+      const itemsSnapshot = await itemsQuery.get();
       
-      let allItems = itemsSnapshot.docs.map(doc => ({
+      let allItems = itemsSnapshot.docs.map((doc: any) => ({
         id: doc.id,
         ...doc.data()
-      })).filter((item: any) => item.is_active !== false);
+      }));
 
       // Sort by created_at desc
       allItems.sort((a: any, b: any) => {
@@ -602,12 +866,12 @@ async function startServer() {
         progressMap.set(doc.data().item_id, { id: doc.id, ...doc.data() });
       });
 
-      // 3. Merge and Filter
+      // 3. Merge and Filter by SM-2 Dates
       const now = new Date();
-      const dueItems = allItems.map(item => {
+      const dueItems = allItems.map((item: any) => {
         const progress = progressMap.get(item.id);
         return { ...item, progress };
-      }).filter(item => {
+      }).filter((item: any) => {
         if (!item.progress) return true; // New items are always due
         const nextReview = item.progress.nextReviewDate ? new Date(item.progress.nextReviewDate) : new Date();
         return nextReview <= now;
@@ -620,88 +884,39 @@ async function startServer() {
     }
   });
 
-  // Step 1: The AI Evaluation API (Backend)
-  app.post("/api/study/evaluate-sentence", verifyFirebaseToken, async (req, res) => {
-    const { term, novelNode, studentSentence, aiStrictness, isRetry, itemType, incorrectSentence, errorTarget } = req.body;
-
-    if (!studentSentence) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
+  app.get('/api/study/endless', verifyFirebaseToken, async (req: any, res) => {
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const userId = req.user.uid;
+      const userDoc = await db.collection('users').doc(userId).get();
       
-      let prompt = `You are a strict but encouraging high school English teacher.`;
+      // Start with a base query for ALL items (we will filter active status in-memory to avoid missing-field bugs)
+      let itemsQuery: any = db.collection('learning_items');
 
-      if (itemType === 'grammar') {
-        prompt += `
-        The student was given the following incorrect sentence: "${incorrectSentence}".
-        Their task was to fix the specific grammar error related to: "${errorTarget}".
-        Evaluate their submitted sentence to see if they successfully fixed the error while maintaining the original meaning.
+      // If the user has a profile AND a class assigned, filter by their specific class
+      if (userDoc.exists && userDoc.data()?.cohort_id) {
+        const cohortId = userDoc.data()?.cohort_id;
+        const cohortDoc = await db.collection('classes').doc(cohortId).get();
         
-        Student Sentence: "${studentSentence}"
-        
-        Provide a detailed evaluation.
-        `;
-      } else {
-        prompt += `
-        Evaluate the following student sentence to check if the term "${term}" is used grammatically correctly.
-        ${novelNode ? `The sentence must also make sense within the context of this novel/topic: "${novelNode}".` : ''}
-        
-        Student Sentence: "${studentSentence}"
-        
-        Provide a detailed evaluation.
-        `;
-      }
-
-      // Add strictness instructions
-      if (aiStrictness === 'honors') {
-        prompt += `\nBe extremely strict. Require complex syntax, rich context clues, and perfect grammar.`;
-      } else if (aiStrictness === 'lenient') {
-        prompt += `\nBe forgiving of minor grammar errors as long as the student demonstrates they understand the core concept.`;
-      } else {
-        prompt += `\nUse a balanced high-school grading rubric.`;
-      }
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              isCorrect: {
-                type: Type.BOOLEAN,
-                description: "Whether the submission is correct."
-              },
-              feedback: {
-                type: Type.STRING,
-                description: "A short, 1-2 sentence summary of the result."
-              },
-              detailedAnalysis: {
-                type: Type.STRING,
-                description: "A detailed explanation of why the sentence is correct or incorrect, pointing out specific grammatical or contextual nuances."
-              },
-              correction: {
-                type: Type.STRING,
-                description: "If incorrect, provide a corrected version. If correct, provide an even more sophisticated variation."
-              },
-              xpAwarded: {
-                type: Type.INTEGER,
-                description: isRetry ? "25 if correct, 10 if incorrect." : "50 if correct, 10 if incorrect."
-              }
-            },
-            required: ["isCorrect", "feedback", "detailedAnalysis", "correction", "xpAwarded"]
-          }
+        if (cohortDoc.exists) {
+          const cohortName = cohortDoc.data()?.name;
+          itemsQuery = itemsQuery.where('target_classes', 'array-contains', cohortName);
         }
-      });
+      }
 
-      const result = JSON.parse(response.text || "{}");
-      res.json(result);
+      const itemsSnapshot = await itemsQuery.get();
+      let allItems = itemsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      
+      // In-memory filter: Keep items unless they are explicitly marked as inactive
+      allItems = allItems.filter((item: any) => item.is_active !== false);
+      
+      // Shuffle the array to randomize the endless practice deck
+      allItems = allItems.sort(() => 0.5 - Math.random());
+      
+      // Return up to 15 random items for this session
+      res.json(allItems.slice(0, 15));
     } catch (error) {
-      console.error('Error evaluating sentence:', error);
-      res.status(500).json({ error: 'Failed to evaluate sentence' });
+      console.error('Error fetching endless items:', error);
+      res.status(500).json({ error: 'Failed to fetch items' });
     }
   });
 
@@ -746,13 +961,9 @@ async function startServer() {
   // Edit Learning Item
   app.patch('/api/admin/edit-item/:itemId', verifyFirebaseToken, verifyTeacher, async (req, res) => {
     const { itemId } = req.params;
-    const { term, definition } = req.body;
-
+    const updates = req.body; // Accept all fields dynamically
     try {
-      await db.collection('learning_items').doc(itemId).update({
-        term,
-        definition
-      });
+      await db.collection('learning_items').doc(itemId).update(updates);
       res.json({ success: true });
     } catch (error) {
       console.error('Error editing item:', error);
