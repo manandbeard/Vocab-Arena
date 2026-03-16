@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import path from "path";
 import { createServer as createViteServer } from "vite";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -28,16 +29,28 @@ process.on('uncaughtException', (err) => {
 });
 
 // Initialize Firebase Admin
+let db: any;
+let auth: any;
+
 if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
   try {
     console.log("Attempting to initialize Firebase Admin for project:", process.env.FIREBASE_PROJECT_ID);
+    
+    let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    privateKey = privateKey.replace(/\\n/g, '\n');
+
     initializeApp({
       credential: cert({
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        privateKey: privateKey,
       }),
     });
+    db = getFirestore();
+    auth = getAuth();
     console.log("Firebase Admin initialized successfully.");
   } catch (error: any) {
     console.error("Error initializing Firebase Admin:", error.message);
@@ -51,12 +64,10 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
   );
 }
 
-const db = getFirestore();
-const auth = getAuth();
+const app = express();
 
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   app.use(cors({
     origin: '*',
@@ -82,6 +93,11 @@ async function startServer() {
 
   // Middleware to verify Firebase Token
   const verifyFirebaseToken = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!auth || !db) {
+      console.error('Firebase Admin not initialized. Cannot verify token.');
+      return res.status(500).json({ error: 'Database connection not initialized. Please check server environment variables.' });
+    }
+
     console.log('Verifying token. Headers:', JSON.stringify(req.headers));
     const idToken = req.headers['x-auth-token'] as string;
     
@@ -1003,20 +1019,30 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    // Production static file serving would go here
-    app.use(express.static('dist'));
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    
+    // Catch-all route for SPA
+    app.get('*', (req, res, next) => {
+      if (req.url.startsWith('/api')) return next();
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server fully initialized and running on http://localhost:${PORT}`);
-  });
+  if (process.env.VERCEL !== "1") {
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server fully initialized and running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
