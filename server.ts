@@ -7,6 +7,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import { rateLimit } from "express-rate-limit";
 
 // Extend Express Request interface to include user
 declare global {
@@ -89,6 +90,16 @@ async function startServer() {
 
   app.get("/api/debug", (req, res) => {
     res.json({ status: "ok", message: "Debug endpoint reached", headers: req.headers });
+  });
+
+  // Rate limiter for AI-powered endpoints (Gemini API calls).
+  // Limits each IP to 20 AI requests per minute to prevent API cost abuse.
+  const aiRateLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many AI requests. Please wait a moment before trying again.' }
   });
 
   // Middleware to verify Firebase Token
@@ -672,6 +683,9 @@ async function startServer() {
           easeFactor: sm2Result.easeFactor,
           interval: sm2Result.interval,
           nextReviewDate: sm2Result.nextReviewDate,
+          // LSTM-specific memory state (persisted for future scheduling accuracy)
+          ...(sm2Result.cellState !== undefined && { cellState: sm2Result.cellState }),
+          ...(sm2Result.hiddenState !== undefined && { hiddenState: sm2Result.hiddenState }),
           consecutive_failures: consecutiveFailures,
           is_nemesis: isNemesis,
           lastReviewed: FieldValue.serverTimestamp()
@@ -1004,6 +1018,186 @@ async function startServer() {
     } catch (error) {
       console.error('Error toggling item status:', error);
       res.status(500).json({ error: 'Failed to toggle item status' });
+    }
+  });
+
+  // ── Blurting Metric ──────────────────────────────────────────────────────
+  // Students type everything they know about a term/concept in a blank text box.
+  // Gemini grades the response against the item's core concepts and returns a
+  // 0-5 quality score (compatible with the LSTM scheduler) plus detailed feedback.
+  app.post('/api/study/blurt', aiRateLimiter, verifyFirebaseToken, async (req, res) => {
+    const { itemId, blurtText, term, definition, exampleSentence, partOfSpeech } = req.body;
+
+    if (!itemId || !blurtText || !term || !definition) {
+      return res.status(400).json({ error: 'itemId, blurtText, term, and definition are required' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const prompt = `You are an expert vocabulary teacher grading a "brain blurt" exercise.
+In a brain blurt, a student freely writes everything they know about a word without prompts or hints.
+Your job is to assess how deeply the student understands the concept.
+
+Word: "${term}"
+Part of Speech: "${partOfSpeech || 'N/A'}"
+Definition: "${definition}"
+Example Sentence: "${exampleSentence || 'N/A'}"
+
+Student's Brain Blurt:
+"""
+${blurtText}
+"""
+
+Evaluate the student's response on a 0-5 quality scale:
+  5 — Perfect recall: covers definition, usage, nuances, and/or synonyms with confidence.
+  4 — Strong recall: correct definition and usage with minor omissions.
+  3 — Adequate recall: grasps the core meaning but misses important nuances.
+  2 — Partial recall: vague or partially correct understanding.
+  1 — Minimal recall: barely relevant or mostly incorrect.
+  0 — Blackout: completely wrong or blank.
+
+Return ONLY valid JSON.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              qualityScore: { type: Type.INTEGER, description: '0-5 quality score' },
+              feedback: { type: Type.STRING, description: 'Short 1-2 sentence summary for the student' },
+              conceptsCovered: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'Key concepts the student correctly identified'
+              },
+              conceptsMissed: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'Important concepts the student missed or got wrong'
+              },
+              suggestedImprovements: {
+                type: Type.STRING,
+                description: 'Concrete advice on what to study next'
+              },
+              xpAwarded: { type: Type.INTEGER, description: '10-75 XP based on quality (higher = more XP)' }
+            },
+            required: ['qualityScore', 'feedback', 'conceptsCovered', 'conceptsMissed', 'suggestedImprovements', 'xpAwarded']
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text || '{}');
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error grading blurt:', error);
+      res.status(500).json({ error: 'Failed to grade blurt response', details: error.message });
+    }
+  });
+
+  // ── Variable Prompt Transformer ───────────────────────────────────────────
+  // Transforms a flashcard into a different question format to prevent
+  // rote memorisation of card patterns (interleaving & variability).
+  // Supported target formats: 'multiple_choice', 'feynman', 'synonym_challenge'
+  app.post('/api/study/transform-prompt', aiRateLimiter, verifyFirebaseToken, async (req, res) => {
+    const { term, definition, exampleSentence, currentPrompt, targetFormat, novelNode } = req.body;
+
+    if (!term || !definition || !targetFormat) {
+      return res.status(400).json({ error: 'term, definition, and targetFormat are required' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      let formatInstructions = '';
+      let schemaProperties: any = {};
+      let schemaRequired: string[] = [];
+
+      if (targetFormat === 'multiple_choice') {
+        formatInstructions = `Create a multiple-choice question that tests knowledge of the word "${term}".
+Generate one correct answer and three plausible distractors.
+${novelNode ? `The question should be set in the context of: "${novelNode}".` : ''}`;
+        schemaProperties = {
+          questionText: { type: Type.STRING, description: 'The multiple-choice question' },
+          correctAnswer: { type: Type.STRING, description: 'The correct answer option' },
+          distractors: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Three plausible but incorrect answer options'
+          },
+          explanation: { type: Type.STRING, description: 'Brief explanation of why the correct answer is right' }
+        };
+        schemaRequired = ['questionText', 'correctAnswer', 'distractors', 'explanation'];
+      } else if (targetFormat === 'feynman') {
+        formatInstructions = `Using the Feynman Technique, create a prompt that asks the student to explain
+the concept of "${term}" in simple terms as if teaching it to a younger student or a complete novice.
+The explanation should avoid jargon and use an analogy if possible.`;
+        schemaProperties = {
+          prompt: { type: Type.STRING, description: 'The Feynman explanation challenge prompt' },
+          keyConceptsToInclude: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'The 2-3 key ideas the student must mention to earn full credit'
+          },
+          exampleAnswer: { type: Type.STRING, description: 'A model Feynman-style answer for the teacher' }
+        };
+        schemaRequired = ['prompt', 'keyConceptsToInclude', 'exampleAnswer'];
+      } else if (targetFormat === 'synonym_challenge') {
+        formatInstructions = `Create a synonym challenge for the word "${term}" (${definition}).
+List 2-3 synonyms and ask the student to pick the one that best fits a provided sentence context.`;
+        schemaProperties = {
+          prompt: { type: Type.STRING, description: 'The synonym selection prompt with a sentence context' },
+          synonyms: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'List of synonyms presented to the student' },
+          bestSynonym: { type: Type.STRING, description: 'The synonym that best fits the given context' },
+          explanation: { type: Type.STRING, description: 'Why this synonym fits best in the given context' }
+        };
+        schemaRequired = ['prompt', 'synonyms', 'bestSynonym', 'explanation'];
+      } else {
+        return res.status(400).json({ error: 'Invalid targetFormat. Use: multiple_choice, feynman, or synonym_challenge' });
+      }
+
+      const prompt = `You are an expert vocabulary educator creating varied practice questions.
+
+Word: "${term}"
+Definition: "${definition}"
+Example: "${exampleSentence || 'N/A'}"
+${currentPrompt ? `Current prompt (do NOT repeat this format): "${currentPrompt}"` : ''}
+
+${formatInstructions}
+
+Return ONLY valid JSON.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: schemaProperties,
+            required: schemaRequired
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text || '{}');
+      res.json({ format: targetFormat, ...result });
+    } catch (error: any) {
+      console.error('Error transforming prompt:', error);
+      res.status(500).json({ error: 'Failed to transform prompt', details: error.message });
     }
   });
 
