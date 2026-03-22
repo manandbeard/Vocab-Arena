@@ -12,6 +12,15 @@
 import { Router, Request, Response } from "express";
 import { Pool } from "pg";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
+
+// 10 blurt submissions per minute per IP (LLM calls are expensive)
+const blurtLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 interface BlurtingScores {
   coverage: number;
@@ -84,7 +93,7 @@ export function createBlurtingRouter(pgPool: Pool, geminiClient: any): Router {
   const router = Router();
 
   // ── POST /api/blurting-prompt ──────────────────────────────────────────── //
-  router.post("/blurting-prompt", async (req: Request, res: Response) => {
+  router.post("/blurting-prompt", blurtLimiter, async (req: Request, res: Response) => {
     const { user_id, concept_id } = req.body as {
       user_id?: string;
       concept_id?: number;
@@ -117,7 +126,7 @@ export function createBlurtingRouter(pgPool: Pool, geminiClient: any): Router {
   });
 
   // ── POST /api/submit-blurt ─────────────────────────────────────────────── //
-  router.post("/submit-blurt", async (req: Request, res: Response) => {
+  router.post("/submit-blurt", blurtLimiter, async (req: Request, res: Response) => {
     const { user_id, concept_id, response_text } = req.body as {
       user_id?: string;
       concept_id?: number;

@@ -12,6 +12,15 @@
 import { Router, Request, Response } from "express";
 import { Pool } from "pg";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
+
+// 20 requests per minute per IP (session planning is heavier)
+const sessionLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ─────────────────────────────────────────────── types ── //
 
@@ -140,7 +149,7 @@ export function createSessionRouter(pgPool: Pool, geminiClient?: any): Router {
   const router = Router();
 
   // ── POST /api/plan-session ─────────────────────────────────────────────── //
-  router.post("/plan-session", async (req: Request, res: Response) => {
+  router.post("/plan-session", sessionLimiter, async (req: Request, res: Response) => {
     const {
       user_id,
       desired_count = 20,
@@ -235,7 +244,7 @@ export function createSessionRouter(pgPool: Pool, geminiClient?: any): Router {
   });
 
   // ── POST /api/render-item ──────────────────────────────────────────────── //
-  router.post("/render-item", async (req: Request, res: Response) => {
+  router.post("/render-item", sessionLimiter, async (req: Request, res: Response) => {
     const { planned_item, user_id } = req.body as {
       planned_item?: PlannedItem;
       user_id?: string;

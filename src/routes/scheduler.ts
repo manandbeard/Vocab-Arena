@@ -9,13 +9,22 @@
  */
 import { Router, Request, Response } from "express";
 import { Pool } from "pg";
+import rateLimit from "express-rate-limit";
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8001";
+
+// 30 requests per minute per IP
+const schedulerLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 export function createSchedulerRouter(pgPool: Pool): Router {
   const router = Router();
 
-  router.post("/", async (req: Request, res: Response) => {
+  router.post("/", schedulerLimiter, async (req: Request, res: Response) => {
     const { user_id, card_id, now, target_recall } = req.body as {
       user_id?: string;
       card_id?: number;
