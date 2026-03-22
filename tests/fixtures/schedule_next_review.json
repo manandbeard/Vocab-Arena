@@ -1,0 +1,13 @@
+{
+  "request": {
+    "user_id": "firebase-uid-abc123",
+    "card_id": 9,
+    "now": "2026-03-22T21:00:00.000Z",
+    "target_recall": 0.9
+  },
+  "response": {
+    "scheduled_at": "2026-03-25T09:30:00.000Z",
+    "predicted_recall": 0.9012,
+    "model_version": "1.0"
+  }
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "user_id": "u1",
+    "card_id": 1,
+    "timestamp": "2024-01-01T10:00:00Z",
+    "rating": 4,
+    "latency_ms": 1200,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u1",
+    "card_id": 1,
+    "timestamp": "2024-01-03T10:00:00Z",
+    "rating": 5,
+    "latency_ms": 900,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u1",
+    "card_id": 1,
+    "timestamp": "2024-01-08T10:00:00Z",
+    "rating": 4,
+    "latency_ms": 1100,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u1",
+    "card_id": 2,
+    "timestamp": "2024-01-01T10:00:00Z",
+    "rating": 1,
+    "latency_ms": 3000,
+    "was_hint_used": true,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u1",
+    "card_id": 2,
+    "timestamp": "2024-01-02T10:00:00Z",
+    "rating": 2,
+    "latency_ms": 2500,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u1",
+    "card_id": 2,
+    "timestamp": "2024-01-03T10:00:00Z",
+    "rating": 3,
+    "latency_ms": 2000,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u2",
+    "card_id": 1,
+    "timestamp": "2024-01-01T10:00:00Z",
+    "rating": 3,
+    "latency_ms": 1500,
+    "was_hint_used": false,
+    "is_synthetic": false
+  },
+  {
+    "user_id": "u2",
+    "card_id": 1,
+    "timestamp": "2024-01-05T10:00:00Z",
+    "rating": 4,
+    "latency_ms": 1300,
+    "was_hint_used": false,
+    "is_synthetic": false
+  }
+]

@@ -1,0 +1,72 @@
+{
+  "request_cloze": {
+    "user_id": "firebase-uid-abc123",
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "planned_item": {
+      "card_id": 2,
+      "concept_id": 3,
+      "planned_prompt_variant": "cloze"
+    }
+  },
+  "response_cloze": {
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "item_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "display_type": "text-input",
+    "prompt_text": "The process by which plants convert sunlight into ___ is called photosynthesis."
+  },
+
+  "request_mcq": {
+    "user_id": "firebase-uid-abc123",
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "planned_item": {
+      "card_id": 9,
+      "concept_id": 2,
+      "planned_prompt_variant": "mcq"
+    }
+  },
+  "response_mcq": {
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "item_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+    "display_type": "mcq",
+    "prompt_text": "What is the primary function of mitochondria?",
+    "answer_choices": [
+      "Protein synthesis",
+      "Energy production (ATP)",
+      "DNA replication",
+      "Cell signalling"
+    ],
+    "correct_answer_index": 1
+  },
+
+  "request_feynman": {
+    "user_id": "firebase-uid-abc123",
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "planned_item": {
+      "card_id": 4,
+      "concept_id": 1,
+      "planned_prompt_variant": "feynman"
+    }
+  },
+  "response_feynman": {
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "item_id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+    "display_type": "short-explain",
+    "prompt_text": "Explain the concept \"Mitosis\" in your own words to a 9th grader. Be specific and use an example."
+  },
+
+  "request_example": {
+    "user_id": "firebase-uid-abc123",
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "planned_item": {
+      "card_id": 7,
+      "concept_id": 1,
+      "planned_prompt_variant": "example"
+    }
+  },
+  "response_example": {
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "item_id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+    "display_type": "example",
+    "prompt_text": "Give a new, original example of \"Metaphor\" that was not mentioned in class."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "request": {
+    "user_id": "firebase-uid-abc123",
+    "desired_count": 10,
+    "optional_concept_ids": [1, 2, 3]
+  },
+  "response": {
+    "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "items": [
+      { "card_id": 4,  "concept_id": 1, "planned_prompt_variant": "feynman"  },
+      { "card_id": 9,  "concept_id": 2, "planned_prompt_variant": "mcq"      },
+      { "card_id": 2,  "concept_id": 3, "planned_prompt_variant": "cloze"    },
+      { "card_id": 7,  "concept_id": 1, "planned_prompt_variant": "example"  },
+      { "card_id": 11, "concept_id": 2, "planned_prompt_variant": "qa"       },
+      { "card_id": 5,  "concept_id": 3, "planned_prompt_variant": "feynman"  },
+      { "card_id": 1,  "concept_id": 1, "planned_prompt_variant": "cloze"    },
+      { "card_id": 8,  "concept_id": 2, "planned_prompt_variant": "example"  },
+      { "card_id": 3,  "concept_id": 3, "planned_prompt_variant": "mcq"      },
+      { "card_id": 6,  "concept_id": 1, "planned_prompt_variant": "qa"       }
+    ]
+  }
+}
