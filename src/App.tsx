@@ -5,15 +5,12 @@ import { collection, addDoc, getDocs, query, where, orderBy, doc, setDoc, getDoc
 import { GoogleGenAI, Type } from "@google/genai";
 import { auth, db, googleProvider, isFirebaseConfigured } from './firebase';
 import { LogIn, ShieldAlert, Loader2, Sparkles, Save, CheckCircle, LogOut, Menu, X, LayoutDashboard, Swords, Users, UsersRound, Plus, Trash2, Edit3, BookOpen, History, BrainCircuit, FileText, Volume2, Trophy, Download, Settings, Eye, EyeOff, Power, Search, ArrowLeft, ArrowRightLeft, UserMinus, Archive, Copy, Ghost, Skull, Flame } from 'lucide-react';
+import { calculateLSTM, getInitialLSTMState, type LSTMState } from './engine/lstmScheduler';
 
-// --- SM-2 Algorithm ---
-
-interface SM2Result {
-  repetitions: number;
-  easeFactor: number;
-  interval: number;
-  nextReviewDate: Date;
-}
+// Items with LSTM stability above this threshold trigger a boss encounter
+const BOSS_STABILITY_THRESHOLD = 20;
+// Fraction of blurt score converted to XP (score 0-100 → up to 50 XP)
+const BLURT_XP_MULTIPLIER = 0.5;
 
 interface Cohort {
   id: string;
@@ -28,7 +25,7 @@ interface Cohort {
 }
 
 interface QuestionBankItem {
-  type: 'cloze' | 'application' | 'synonym_context';
+  type: 'cloze' | 'application' | 'synonym_context' | 'feynman';
   prompt_text: string;
   answer_text: string;
 }
@@ -51,42 +48,16 @@ interface LearningItem {
   masteryPercentage?: number;
 }
 
-function calculateSM2(
-  quality: number,
-  prevRepetitions: number,
-  prevEaseFactor: number,
-  prevInterval: number
-): SM2Result {
-  let repetitions: number;
-  let easeFactor: number;
-  let interval: number;
-
-  if (quality >= 3) {
-    if (prevRepetitions === 0) {
-      interval = 1;
-    } else if (prevRepetitions === 1) {
-      interval = 6;
-    } else {
-      interval = Math.round(prevInterval * prevEaseFactor);
-    }
-    repetitions = prevRepetitions + 1;
-    easeFactor = prevEaseFactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-  } else {
-    repetitions = 0;
-    interval = 1;
-    easeFactor = prevEaseFactor;
-  }
-
-  if (easeFactor < 1.3) easeFactor = 1.3;
-
-  const nextReviewDate = new Date();
-  nextReviewDate.setDate(nextReviewDate.getDate() + interval);
-
+/** Build an LSTMState from raw Firestore progress data (handles legacy SM-2 docs). */
+function progressToLSTMState(progress: any): LSTMState {
   return {
-    repetitions,
-    easeFactor,
-    interval,
-    nextReviewDate,
+    h: progress?.lstm_h ?? 0,
+    c: progress?.lstm_c ?? 0,
+    stability: progress?.lstm_stability ?? progress?.interval ?? 1,
+    difficulty: progress?.lstm_difficulty ?? 0.3,
+    interval: progress?.interval ?? 0,
+    nextReviewDate: progress?.nextReviewDate ?? new Date().toISOString(),
+    repetitions: progress?.repetition_count ?? progress?.repetitions ?? 0,
   };
 }
 
@@ -548,7 +519,7 @@ function Arena() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userData, setUserData] = useState<any>(null);
-  const [sessionState, setSessionState] = useState<'hub' | 'active' | 'victory' | 'boss'>('hub');
+  const [sessionState, setSessionState] = useState<'hub' | 'active' | 'victory' | 'boss' | 'blurt'>('hub');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
   const [sessionXp, setSessionXp] = useState(0);
@@ -562,6 +533,13 @@ function Arena() {
   const [isSettingCohort, setIsSettingCohort] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [slideDirection, setSlideDirection] = useState<'in' | 'out'>('in');
+  // Blurting Mode state
+  const [blurtText, setBlurtText] = useState('');
+  const [blurtFeedback, setBlurtFeedback] = useState<any>(null);
+  const [isBlurtSubmitting, setIsBlurtSubmitting] = useState(false);
+  const [blurtItems, setBlurtItems] = useState<any[]>([]);
+  const [blurtIndex, setBlurtIndex] = useState(0);
+  const [blurtStartTime, setBlurtStartTime] = useState<number>(0);
   const [studentSentence, setStudentSentence] = useState('');
   const [bossFeedback, setBossFeedback] = useState<{isCorrect: boolean, feedback: string, detailedAnalysis?: string, correction?: string, xpAwarded: number} | null>(null);
   const [cohortSettings, setCohortSettings] = useState<any>(null);
@@ -688,6 +666,23 @@ function Arena() {
   useEffect(() => {
     if (items.length > 0 && items[currentIndex]) {
       const item = items[currentIndex];
+
+      // 20% chance of injecting a Feynman-technique question for vocab items
+      // to encourage concept-level understanding over rote card memorisation.
+      if (
+        item.item_type === 'vocab' &&
+        item.term &&
+        item.definition &&
+        Math.random() < 0.2
+      ) {
+        setCurrentQuestion({
+          type: 'feynman',
+          prompt_text: `Explain the concept of "${item.term}" in your own words — as if you're teaching a classmate who has never heard this word before.`,
+          answer_text: `${item.definition}${item.example_sentence ? `  •  Example: "${item.example_sentence}"` : ''}`
+        });
+        return;
+      }
+
       if (item.question_bank && item.question_bank.length > 0) {
         const randomIndex = Math.floor(Math.random() * item.question_bank.length);
         setCurrentQuestion(item.question_bank[randomIndex]);
@@ -716,7 +711,7 @@ function Arena() {
       
       const firstItem = items[0];
       const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
-      const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < encounterChance || (firstItem.progress?.easeFactor > 2.5));
+      const isBossEncounter = firstItem.item_type === 'vocab' && (Math.random() < encounterChance || (firstItem.progress?.lstm_stability > BOSS_STABILITY_THRESHOLD));
       if (isBossEncounter) {
         playSound('boss');
         triggerShake();
@@ -813,21 +808,10 @@ function Arena() {
     playSound(quality >= 3 ? 'success' : 'error');
 
     try {
-      const prevProgress = currentItem.progress || {
-        repetitions: 0,
-        easeFactor: 2.5,
-        interval: 0
-      };
-
-      const result = calculateSM2(
-        quality,
-        prevProgress.repetitions,
-        prevProgress.easeFactor,
-        prevProgress.interval
-      );
 
       // Call API to log review and update progress
       const token = localStorage.getItem('token');
+      const lstmResult = calculateLSTM(quality, progressToLSTMState(currentItem.progress));
       const response = await fetch('/api/study/log-review', {
         method: 'POST',
         headers: {
@@ -839,11 +823,14 @@ function Arena() {
           score: quality,
           responseTimeMs,
           isBoss: sessionState === 'boss',
-          sm2Result: {
-            repetitions: result.repetitions,
-            easeFactor: result.easeFactor,
-            interval: result.interval,
-            nextReviewDate: result.nextReviewDate.toISOString()
+          lstmState: {
+            h: lstmResult.h,
+            c: lstmResult.c,
+            stability: lstmResult.stability,
+            difficulty: lstmResult.difficulty,
+            interval: lstmResult.interval,
+            nextReviewDate: lstmResult.nextReviewDate,
+            repetitions: lstmResult.repetitions
           }
         })
       });
@@ -873,7 +860,7 @@ function Arena() {
           
           const nextItem = items[currentIndex + 1];
           const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
-          const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
+          const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.lstm_stability > BOSS_STABILITY_THRESHOLD));
           if (isBossEncounter) {
             playSound('boss');
             triggerShake();
@@ -996,19 +983,8 @@ function Arena() {
       
       const quality = result.isCorrect ? 4 : 1;
       const responseTimeMs = Date.now() - startTime;
-      
-      const prevProgress = currentItem.progress || {
-        repetitions: 0,
-        easeFactor: 2.5,
-        interval: 0
-      };
 
-      const sm2Result = calculateSM2(
-        quality,
-        prevProgress.repetitions,
-        prevProgress.easeFactor,
-        prevProgress.interval
-      );
+      const lstmResult = calculateLSTM(quality, progressToLSTMState(currentItem.progress));
 
       await fetch('/api/study/log-review', {
         method: 'POST',
@@ -1022,11 +998,14 @@ function Arena() {
           responseTimeMs,
           isBoss: sessionState === 'boss',
           xpAwarded: finalXp,
-          sm2Result: {
-            repetitions: sm2Result.repetitions,
-            easeFactor: sm2Result.easeFactor,
-            interval: sm2Result.interval,
-            nextReviewDate: sm2Result.nextReviewDate.toISOString()
+          lstmState: {
+            h: lstmResult.h,
+            c: lstmResult.c,
+            stability: lstmResult.stability,
+            difficulty: lstmResult.difficulty,
+            interval: lstmResult.interval,
+            nextReviewDate: lstmResult.nextReviewDate,
+            repetitions: lstmResult.repetitions
           }
         })
       });
@@ -1035,6 +1014,115 @@ function Arena() {
       alert("An error occurred during evaluation.");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleStartBlurt = async () => {
+    setIsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/study/endless', {
+        headers: { 'x-auth-token': token || '' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const vocabOnly = data.filter((item: any) => item.item_type === 'vocab');
+        if (vocabOnly.length === 0) {
+          alert("No vocabulary items found. Add some vocab words first!");
+          return;
+        }
+        const sessionItems = vocabOnly.slice(0, 8);
+        setBlurtItems(sessionItems);
+        setBlurtIndex(0);
+        setBlurtText('');
+        setBlurtFeedback(null);
+        setSessionXp(0);
+        setBlurtStartTime(Date.now());
+        setSessionState('blurt');
+      } else {
+        alert("Failed to load blurt mode. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error starting blurt mode:", err);
+      alert("Failed to load blurt mode.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmitBlurt = async () => {
+    if (!blurtText.trim()) return;
+    setIsBlurtSubmitting(true);
+    const currentBlurtItem = blurtItems[blurtIndex];
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/study/blurt-evaluate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Token': token || ''
+        },
+        body: JSON.stringify({
+          term: currentBlurtItem.term,
+          definition: currentBlurtItem.definition,
+          partOfSpeech: currentBlurtItem.part_of_speech,
+          exampleSentence: currentBlurtItem.example_sentence,
+          studentBlurt: blurtText.trim()
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const responseTimeMs = Date.now() - blurtStartTime;
+        setBlurtFeedback(result);
+        playSound(result.quality >= 3 ? 'success' : 'error');
+        const xpEarned = Math.round((result.score ?? 0) * BLURT_XP_MULTIPLIER);
+        setSessionXp(prev => prev + xpEarned);
+
+        // Log the review using the LSTM engine
+        const lstmResult = calculateLSTM(
+          Math.min(5, Math.max(0, result.quality ?? 0)),
+          progressToLSTMState(currentBlurtItem.progress)
+        );
+        await fetch('/api/study/log-review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token || '' },
+          body: JSON.stringify({
+            itemId: currentBlurtItem.id,
+            score: result.quality ?? 0,
+            responseTimeMs,
+            lstmState: {
+              h: lstmResult.h,
+              c: lstmResult.c,
+              stability: lstmResult.stability,
+              difficulty: lstmResult.difficulty,
+              interval: lstmResult.interval,
+              nextReviewDate: lstmResult.nextReviewDate,
+              repetitions: lstmResult.repetitions
+            }
+          })
+        });
+      } else {
+        const err = await response.json().catch(() => ({}));
+        alert(err.error || "Failed to evaluate your response. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error submitting blurt:", err);
+      alert("An error occurred during evaluation.");
+    } finally {
+      setIsBlurtSubmitting(false);
+    }
+  };
+
+  const handleNextBlurtItem = () => {
+    if (blurtIndex + 1 < blurtItems.length) {
+      setBlurtIndex(prev => prev + 1);
+      setBlurtText('');
+      setBlurtFeedback(null);
+      setBlurtStartTime(Date.now());
+    } else {
+      fetchUserData();
+      setSessionState('victory');
     }
   };
 
@@ -1054,7 +1142,7 @@ function Arena() {
         
         const nextItem = items[currentIndex + 1];
         const encounterChance = (cohortSettings?.boss_encounter_rate || 15) / 100;
-        const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.easeFactor > 2.5));
+        const isBossEncounter = nextItem.item_type === 'vocab' && (Math.random() < encounterChance || (nextItem.progress?.lstm_stability > BOSS_STABILITY_THRESHOLD));
         if (isBossEncounter) {
           triggerShake();
         }
@@ -1263,6 +1351,17 @@ function Arena() {
                 Endless Practice Mode
               </button>
 
+              <button 
+                onClick={handleStartBlurt}
+                className="w-full bg-slate-800 hover:bg-slate-700 border border-violet-700/50 text-slate-300 font-bold text-lg py-6 px-8 rounded-3xl transition-all flex flex-col items-center justify-center gap-1 transform hover:scale-[1.02] shadow-lg group"
+              >
+                <span className="flex items-center gap-3">
+                  <BrainCircuit className="w-5 h-5 text-violet-400 group-hover:animate-pulse" />
+                  Blurt Test
+                </span>
+                <span className="text-xs text-slate-500 font-normal uppercase tracking-widest">AI-graded free recall</span>
+              </button>
+
               {/* DEV TOOL: Reset Progress */}
               <button 
                 onClick={handleResetProgress}
@@ -1427,8 +1526,10 @@ function Arena() {
 
                     <div className="text-center space-y-10 w-full relative z-10">
                       <div className="space-y-6">
-                        <h2 className="text-sm text-slate-400 uppercase tracking-widest font-bold">
-                          {currentQuestion?.type === 'grammar' ? 'Spot the Bug' : currentQuestion?.type?.replace('_', ' ')}
+                        <h2 className={`text-sm uppercase tracking-widest font-bold ${currentQuestion?.type === 'feynman' ? 'text-violet-400' : 'text-slate-400'}`}>
+                          {currentQuestion?.type === 'grammar' ? 'Spot the Bug' :
+                           currentQuestion?.type === 'feynman' ? '🧠 Feynman Technique' :
+                           currentQuestion?.type?.replace('_', ' ')}
                         </h2>
                       <div className="flex items-center justify-center gap-4">
                         <p className="text-3xl md:text-4xl font-medium leading-relaxed italic text-white">
@@ -1749,6 +1850,146 @@ function Arena() {
           >
             Return to Hub
           </button>
+        </div>
+      )}
+
+      {/* ── Blurt Mode Session ──────────────────────────────────────────── */}
+      {sessionState === 'blurt' && blurtItems.length > 0 && (
+        <div className="max-w-3xl mx-auto animate-in fade-in zoom-in-95 duration-500">
+          {/* Header */}
+          <div className="mb-8">
+            <div className="flex justify-between items-center text-sm font-bold text-slate-400 mb-2 uppercase tracking-widest">
+              <span className="flex items-center gap-2 text-violet-400">
+                <BrainCircuit className="w-4 h-4" />
+                Blurt Test — Word {blurtIndex + 1} of {blurtItems.length}
+              </span>
+              <span className="text-indigo-400">{sessionXp} XP</span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-violet-500 h-full transition-all duration-300"
+                style={{ width: `${(blurtIndex / blurtItems.length) * 100}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="bg-slate-800 border-2 border-violet-700/40 rounded-2xl p-8 md:p-12 shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-violet-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+
+            {!blurtFeedback ? (
+              <div className="relative z-10 space-y-8">
+                <div className="text-center space-y-3">
+                  <span className="text-xs font-bold text-violet-400 uppercase tracking-widest">Free Recall Challenge</span>
+                  <h2 className="text-5xl md:text-6xl font-black text-white tracking-tight">
+                    {blurtItems[blurtIndex]?.term}
+                  </h2>
+                  <p className="text-slate-500 text-sm">
+                    Write everything you know about this word — definition, usage, examples, context. No hints!
+                  </p>
+                </div>
+
+                <div>
+                  <textarea
+                    value={blurtText}
+                    onChange={(e) => setBlurtText(e.target.value)}
+                    placeholder="Start writing everything you know…"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-5 text-white placeholder-slate-600 focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none resize-none h-40 text-base leading-relaxed"
+                  />
+                  <p className="text-xs text-slate-600 mt-1 text-right">{blurtText.length} characters</p>
+                </div>
+
+                <div className="flex gap-4">
+                  <button
+                    onClick={handleSubmitBlurt}
+                    disabled={isBlurtSubmitting || !blurtText.trim()}
+                    className="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-black text-xl py-5 px-8 rounded-xl shadow-[0_0_20px_rgba(139,92,246,0.4)] transition-all transform hover:scale-105 disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-3"
+                  >
+                    {isBlurtSubmitting ? (
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                    ) : (
+                      <>
+                        <BrainCircuit className="w-6 h-6" />
+                        Submit Blurt
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleReturnToHub}
+                    className="px-6 py-5 bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold rounded-xl transition-all"
+                  >
+                    Exit
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative z-10 space-y-6 animate-in fade-in zoom-in-95 duration-500">
+                {/* Score Header */}
+                <div className="text-center space-y-3">
+                  <div className={`inline-flex items-center gap-3 px-6 py-3 rounded-full border-2 ${
+                    blurtFeedback.score >= 70
+                      ? 'bg-emerald-900/30 border-emerald-500 text-emerald-400'
+                      : blurtFeedback.score >= 40
+                      ? 'bg-amber-900/30 border-amber-500 text-amber-400'
+                      : 'bg-red-900/30 border-red-500 text-red-400'
+                  }`}>
+                    {blurtFeedback.score >= 70 ? <CheckCircle className="w-6 h-6" /> : <ShieldAlert className="w-6 h-6" />}
+                    <span className="text-3xl font-black">{blurtFeedback.score ?? 0}/100</span>
+                  </div>
+                  <p className="text-lg font-bold text-white">{blurtFeedback.feedback}</p>
+                </div>
+
+                {/* Concepts breakdown */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  {blurtFeedback.caughtConcepts?.length > 0 && (
+                    <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-xl p-4">
+                      <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-3">✓ You Got</p>
+                      <ul className="space-y-1">
+                        {blurtFeedback.caughtConcepts.map((c: string, i: number) => (
+                          <li key={i} className="text-sm text-emerald-200 flex items-start gap-2">
+                            <CheckCircle className="w-3 h-3 text-emerald-500 mt-0.5 shrink-0" />
+                            {c}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {blurtFeedback.missedConcepts?.length > 0 && (
+                    <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4">
+                      <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-3">✗ Missed</p>
+                      <ul className="space-y-1">
+                        {blurtFeedback.missedConcepts.map((c: string, i: number) => (
+                          <li key={i} className="text-sm text-red-200 flex items-start gap-2">
+                            <ShieldAlert className="w-3 h-3 text-red-500 mt-0.5 shrink-0" />
+                            {c}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {/* Model answer */}
+                {blurtFeedback.modelAnswer && (
+                  <div className="bg-slate-950/60 border border-slate-700 rounded-xl p-4">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Model Answer</p>
+                    <p className="text-slate-300 text-sm leading-relaxed italic">"{blurtFeedback.modelAnswer}"</p>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-violet-400">
+                    +{Math.round((blurtFeedback.score ?? 0) / 2)} XP earned
+                  </span>
+                  <button
+                    onClick={handleNextBlurtItem}
+                    className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-lg py-4 px-8 rounded-xl shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all transform hover:scale-105"
+                  >
+                    {blurtIndex + 1 < blurtItems.length ? 'Next Word →' : 'Finish Session'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
