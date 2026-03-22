@@ -7,6 +7,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import rateLimit from "express-rate-limit";
 
 // Extend Express Request interface to include user
 declare global {
@@ -65,6 +66,18 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
 }
 
 const app = express();
+
+// Number of days in the review interval at which an item is considered "mastered"
+const MASTERY_INTERVAL_THRESHOLD = 21;
+
+// Rate limiter for AI-intensive blurt evaluation endpoint (max 20 requests / 1 min per IP)
+const blurtRateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a moment before trying again.' }
+});
 
 async function startServer() {
   const PORT = process.env.PORT || 3000;
@@ -492,9 +505,96 @@ async function startServer() {
     }
   });
 
+  // Blurt Evaluation — grade a student's free-recall "brain dump" with Gemini
+  app.post("/api/study/blurt-evaluate", blurtRateLimiter, verifyFirebaseToken, async (req: any, res) => {
+    const { term, definition, partOfSpeech, exampleSentence, studentBlurt } = req.body;
+    const uid: string = req.user.uid;
+
+    if (!term || !definition || !studentBlurt) {
+      return res.status(400).json({ error: 'Missing required fields: term, definition, studentBlurt' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const prompt = `
+You are an expert language arts teacher evaluating a student's free-recall exercise (the "Blurting Method").
+
+The student was shown only the word and asked to write everything they know about it from memory — no prompts, no hints.
+
+WORD: "${term}"
+CORRECT DEFINITION: "${definition}"
+${partOfSpeech ? `PART OF SPEECH: ${partOfSpeech}` : ''}
+${exampleSentence ? `EXAMPLE SENTENCE: "${exampleSentence}"` : ''}
+
+STUDENT'S BLURT:
+"${studentBlurt}"
+
+Evaluate their response on three dimensions:
+1. **Definition coverage** — Did they capture the core meaning?
+2. **Contextual understanding** — Do they seem to understand how/when to use it?
+3. **Accuracy** — Are there any misconceptions or errors?
+
+Be encouraging but honest. Identify exactly which key concepts they recalled and which they missed.
+      `.trim();
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              score: {
+                type: Type.INTEGER,
+                description: "Overall score from 0 to 100 reflecting how well the student recalled the concept."
+              },
+              quality: {
+                type: Type.INTEGER,
+                description: "SRS quality rating 0-5: 0=complete blackout, 3=correct with difficulty, 5=perfect recall."
+              },
+              feedback: {
+                type: Type.STRING,
+                description: "A brief 1-2 sentence summary praising what they got right."
+              },
+              missedConcepts: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Key concepts or nuances the student missed or got wrong."
+              },
+              caughtConcepts: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Key concepts the student correctly recalled."
+              },
+              modelAnswer: {
+                type: Type.STRING,
+                description: "A concise ideal answer the student can compare against."
+              }
+            },
+            required: ["score", "quality", "feedback", "missedConcepts", "caughtConcepts", "modelAnswer"]
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text || "{}");
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error evaluating blurt:', error.message);
+      res.status(500).json({ error: 'Failed to evaluate response.', details: error.message });
+    }
+  });
+
   // Step 1: The Rank-Up Logic (Backend)
   app.post("/api/study/log-review", verifyFirebaseToken, async (req, res) => {
-    const { itemId, score, responseTimeMs, sm2Result, isBoss, xpAwarded } = req.body;
+    // Accept both legacy sm2Result and new lstmState fields
+    const { itemId, score, responseTimeMs, sm2Result, lstmState, isBoss, xpAwarded } = req.body;
     const { uid } = req.user;
 
     if (!itemId || score === undefined || !responseTimeMs) {
@@ -519,8 +619,9 @@ async function startServer() {
       let newRank = '';
 
       // Fetch old progress to check mastery
+      const schedulerResult = lstmState || sm2Result;
       let progressData: any = null;
-      if (sm2Result) {
+      if (schedulerResult) {
         const progressRef = db.collection('users').doc(uid).collection('user_progress').doc(itemId);
         const progressDoc = await progressRef.get();
         if (progressDoc.exists) {
@@ -530,7 +631,7 @@ async function startServer() {
 
       // 1. Determine if quest criteria were met
       const isBossSlay = isBoss && score >= 3;
-      const isNewMastery = sm2Result?.interval >= 21 && (progressData?.interval || 0) < 21;
+      const isNewMastery = schedulerResult?.interval >= MASTERY_INTERVAL_THRESHOLD && (progressData?.interval || 0) < MASTERY_INTERVAL_THRESHOLD;
 
       // Update User XP and Check Rank
       const userRef = db.collection('users').doc(uid);
@@ -645,37 +746,46 @@ async function startServer() {
         created_at: new Date().toISOString()
       });
 
-      // Update User Progress with provided SM-2 results
-      if (sm2Result) {
+      // Update User Progress — accepts LSTM state (preferred) or legacy SM-2 result
+      if (schedulerResult) {
         const progressRef = db.collection('users').doc(uid).collection('user_progress').doc(itemId);
-        
+
         let consecutiveFailures = progressData?.consecutive_failures || 0;
         let isNemesis = progressData?.is_nemesis || false;
-
         const correct = score >= 3;
 
         // Nemesis Logic
         if (!correct) {
           consecutiveFailures += 1;
-          if (consecutiveFailures >= 3) {
-            isNemesis = true;
-          }
+          if (consecutiveFailures >= 3) isNemesis = true;
         } else {
           consecutiveFailures = 0;
-          isNemesis = false; // They defeated it!
+          isNemesis = false;
         }
 
-        await progressRef.set({
+        const progressUpdate: any = {
           item_id: itemId,
           last_reviewed: new Date().toISOString(),
-          repetition_count: sm2Result.repetitions,
-          easeFactor: sm2Result.easeFactor,
-          interval: sm2Result.interval,
-          nextReviewDate: sm2Result.nextReviewDate,
+          interval: schedulerResult.interval,
+          nextReviewDate: schedulerResult.nextReviewDate,
+          repetition_count: schedulerResult.repetitions,
           consecutive_failures: consecutiveFailures,
           is_nemesis: isNemesis,
           lastReviewed: FieldValue.serverTimestamp()
-        }, { merge: true });
+        };
+
+        // Persist LSTM-specific fields when available
+        if (lstmState) {
+          progressUpdate.lstm_h          = lstmState.h;
+          progressUpdate.lstm_c          = lstmState.c;
+          progressUpdate.lstm_stability  = lstmState.stability;
+          progressUpdate.lstm_difficulty = lstmState.difficulty;
+        } else if (sm2Result) {
+          // Legacy SM-2 fields (kept for backward compatibility)
+          progressUpdate.easeFactor = sm2Result.easeFactor;
+        }
+
+        await progressRef.set(progressUpdate, { merge: true });
       }
 
       res.json({ success: true, xpGained, isRushed, leveledUp, newRank });
