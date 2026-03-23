@@ -1,0 +1,28 @@
+{
+  "blurting_prompt_request": {
+    "user_id": "firebase-uid-abc123",
+    "concept_id": 1
+  },
+  "blurting_prompt_response": {
+    "prompt_text": "Without looking at your notes, write everything you know about \"Mitosis\". Include definitions, examples, key points, and any connections to other concepts you can think of."
+  },
+
+  "submit_blurt_request": {
+    "user_id": "firebase-uid-abc123",
+    "concept_id": 1,
+    "response_text": "Mitosis is the process by which a single cell divides into two genetically identical daughter cells. It happens in four main phases: prophase, metaphase, anaphase, and telophase. During prophase the chromosomes condense and the spindle apparatus forms. In metaphase chromosomes align at the cell plate. In anaphase sister chromatids are pulled apart. In telophase two new nuclei form. Mitosis is used for growth and tissue repair. It is different from meiosis which produces four haploid cells for sexual reproduction."
+  },
+  "submit_blurt_response": {
+    "scores": {
+      "coverage": 0.87,
+      "accuracy": 0.92,
+      "organization": 0.78,
+      "overall": 0.86,
+      "missing_key_points": [
+        "Cytokinesis (physical splitting of the cytoplasm)",
+        "Role of centromeres in chromosome attachment"
+      ]
+    },
+    "feedback_text": "Excellent recall of the four main phases and their descriptions. You correctly distinguished mitosis from meiosis. Consider adding cytokinesis as the final step where the cytoplasm actually divides, and mention the role of centromeres in ensuring accurate chromosome segregation."
+  }
+}

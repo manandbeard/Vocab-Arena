@@ -7,6 +7,10 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import { Pool } from "pg";
+import { createSchedulerRouter } from "./src/routes/scheduler.js";
+import { createSessionRouter } from "./src/routes/session.js";
+import { createBlurtingRouter } from "./src/routes/blurting.js";
 
 // Extend Express Request interface to include user
 declare global {
@@ -65,6 +69,12 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
 }
 
 const app = express();
+
+// PostgreSQL pool for spaced-repetition learning engine
+const pgPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  // If no DATABASE_URL is set the pool is created but queries will fail gracefully
+});
 
 async function startServer() {
   const PORT = process.env.PORT || 3000;
@@ -1006,6 +1016,17 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to toggle item status' });
     }
   });
+
+  // ── Spaced-repetition learning engine routes ─────────────────────────── //
+  const geminiForRoutes = process.env.GEMINI_API_KEY
+    ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+    : null;
+
+  app.use("/api/schedule-next-review", createSchedulerRouter(pgPool));
+  const sessionRouter = createSessionRouter(pgPool, geminiForRoutes);
+  app.use("/api", sessionRouter);
+  const blurtingRouter = createBlurtingRouter(pgPool, geminiForRoutes);
+  app.use("/api", blurtingRouter);
 
   // Global Error Handler for API routes
   app.use('/api', (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
